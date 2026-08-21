@@ -32,6 +32,8 @@ and capability drop are the compatible procfs boundary. The service also sets
 required systemd mount namespace; bubblewrap's `--unshare-all` supplies the UTS
 boundary instead and sets the fixed inner hostname `korgo-ssh-client`.
 `SystemCallFilter=~syslog` preserves the compatible kernel-log syscall denial.
+The launcher sets `XDG_SESSION_TYPE=wayland` inside the cleared environment;
+Electron 38 and newer removed the older `ELECTRON_OZONE_PLATFORM_HINT` selector.
 
 ## Inputs
 

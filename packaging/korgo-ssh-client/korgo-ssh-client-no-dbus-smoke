@@ -103,7 +103,7 @@ bwrap \
   --setenv XDG_CACHE_HOME /var/cache/korgo-smoke \
   --setenv XDG_RUNTIME_DIR "/run/user/$uid" \
   --setenv DISPLAY ":$display_number" \
-  --setenv ELECTRON_OZONE_PLATFORM_HINT x11 \
+  --setenv XDG_SESSION_TYPE x11 \
   --setenv FONTCONFIG_FILE "$fontconfig_file" \
   --setenv ELECTRON_IS_DEV 0 \
   --setenv NODE_ENV production \
