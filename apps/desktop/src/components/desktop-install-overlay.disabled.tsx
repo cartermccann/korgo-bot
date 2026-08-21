@@ -40,5 +40,5 @@ export function DesktopInstallOverlay({ enabled = true }: { enabled?: boolean })
     }
   }, [enabled])
 
-  return enabled && needsConnection ? <FirstRunSshForm /> : null
+  return enabled && needsConnection ? <FirstRunSshForm onConnected={() => setNeedsConnection(false)} /> : null
 }

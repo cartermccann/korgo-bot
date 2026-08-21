@@ -16,6 +16,7 @@ const CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/
 
 interface FirstRunSshFormProps {
   onBack?: () => void
+  onConnected?: () => void
 }
 
 function errorMessage(error: unknown): string {
@@ -116,7 +117,7 @@ function sshResultError(result: DesktopConnectionTestResult, copy: ReturnType<ty
   }
 }
 
-export function FirstRunSshForm({ onBack }: FirstRunSshFormProps) {
+export function FirstRunSshForm({ onBack, onConnected }: FirstRunSshFormProps) {
   const { t } = useI18n()
   const copy = t.install
   const [host, setHost] = useState('')
@@ -205,6 +206,7 @@ export function FirstRunSshForm({ onBack }: FirstRunSshFormProps) {
       // write leaves the form populated and never asks main to re-home.
       await window.hermesDesktop.saveConnectionConfig(payload)
       await window.hermesDesktop.applyConnectionConfig(payload)
+      onConnected?.()
     } catch (err) {
       setError(errorMessage(err))
     } finally {
