@@ -265,16 +265,18 @@ in
         DevicePolicy = "closed";
         ProtectSystem = "strict";
         ProtectHome = "tmpfs";
-        # ProtectKernelTunables rewrites the inherited procfs mount topology
-        # and makes bwrap's nested `--proc /proc` fail with EPERM. Keep this
-        # outer control disabled: bwrap supplies a synthetic procfs after
+        # These controls rewrite/mask the inherited procfs mount topology and
+        # make bwrap's nested `--proc /proc` fail with EPERM. Keep the outer
+        # transforms disabled: bwrap supplies a synthetic procfs after
         # unsharing and drops every capability before starting Electron.
         ProtectKernelTunables = false;
+        ProtectKernelLogs = false;
         ProtectKernelModules = true;
-        ProtectKernelLogs = true;
         ProtectControlGroups = true;
         ProtectClock = true;
-        ProtectHostname = true;
+        # ProtectHostname plus any outer mount namespace makes bwrap's nested
+        # procfs mount fail. bwrap's --unshare-all supplies the UTS boundary.
+        ProtectHostname = false;
         RestrictAddressFamilies = [
           "AF_UNIX"
           "AF_INET"
@@ -292,6 +294,9 @@ in
         LockPersonality = true;
         KeyringMode = "private";
         SystemCallArchitectures = "native";
+        # Preserve ProtectKernelLogs' syscall denial without its incompatible
+        # inherited-procfs transformation.
+        SystemCallFilter = [ "~syslog" ];
 
         MemoryMax = cfg.memoryMax;
         TasksMax = 512;

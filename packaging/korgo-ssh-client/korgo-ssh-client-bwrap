@@ -58,6 +58,7 @@ bwrap_args=(
   --die-with-parent
   --new-session
   --unshare-all
+  --hostname korgo-ssh-client
   --share-net
   --cap-drop ALL
   --clearenv

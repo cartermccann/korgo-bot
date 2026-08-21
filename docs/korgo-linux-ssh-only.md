@@ -23,11 +23,15 @@ broad egress, AppImage/FUSE fallback, an unlocked download, or a packaged file
 copied from gitignored `apps/desktop/release/`. A failed control blocks the
 gate; it is not permission to widen the boundary.
 
-The generated service intentionally sets `ProtectKernelTunables=false` because
-that outer systemd mount transformation prevents bubblewrap from creating its
-synthetic `/proc`. Do not "fix" this by removing bubblewrap's `--proc /proc` or
-`--cap-drop ALL`; the nested namespace and capability drop are the compatible
-procfs boundary, while the remaining systemd controls stay enabled.
+The generated service intentionally sets `ProtectKernelTunables=false` and
+`ProtectKernelLogs=false` because either outer systemd procfs transformation
+prevents bubblewrap from creating its synthetic `/proc`. Do not "fix" this by
+removing bubblewrap's `--proc /proc` or `--cap-drop ALL`; the nested namespace
+and capability drop are the compatible procfs boundary. The service also sets
+`ProtectHostname=false` because that outer UTS namespace conflicts with the
+required systemd mount namespace; bubblewrap's `--unshare-all` supplies the UTS
+boundary instead and sets the fixed inner hostname `korgo-ssh-client`.
+`SystemCallFilter=~syslog` preserves the compatible kernel-log syscall denial.
 
 ## Inputs
 
@@ -160,8 +164,12 @@ at login is a new activation event. The generated `ExecStart` wrapper validates
 the bound SSH inputs and immediately `exec`s the launcher in the same mount
 namespace; do not split that validation into `ExecStartPre`. Confirm
 `systemctl show korgo-ssh-client` reports `IPAddressDeny=any`, loopback plus only
-the staged Mini `/32` or `/128`, and `ProtectKernelTunables=no`. A host-side
-override back to `yes` blocks launch because it prevents bubblewrap's synthetic
+the staged Mini `/32` or `/128`, `ProtectKernelTunables=no`,
+`ProtectKernelLogs=no`, and `ProtectHostname=no`. Confirm `systemctl cat
+korgo-ssh-client` contains the literal `SystemCallFilter=~syslog`; the expanded
+`systemctl show korgo-ssh-client -p SystemCallFilter` value must be non-empty and
+must not contain the `syslog` syscall. A host-side override of any disabled
+property back to `yes` blocks launch because it prevents bubblewrap's synthetic
 procfs mount. Run the fixed probe by setting `containmentProbeArguments` in the
 dummy module config:
 

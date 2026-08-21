@@ -163,6 +163,8 @@ json.dump(sorted(leaf_paths(DEFAULT_CONFIG)), sys.stdout, indent=2)
           grep -F -- '--unsetenv SSH_AUTH_SOCK' "$launcher"
           grep -F -- '--unsetenv DBUS_SESSION_BUS_ADDRESS' "$launcher"
           grep -F -- '--ro-bind /nix/store /nix/store' "$launcher"
+          grep -F -- '--unshare-all' "$launcher"
+          grep -F -- '--hostname korgo-ssh-client' "$launcher"
           grep -F -- '--proc /proc' "$launcher"
           grep -F -- '--cap-drop ALL' "$launcher"
           grep -F -- '--ro-bind "$identity" "$identity"' "$launcher"
@@ -175,13 +177,19 @@ json.dump(sorted(leaf_paths(DEFAULT_CONFIG)), sys.stdout, indent=2)
           ! grep -F -- 'remote-debugging' "$launcher"
           ! grep -E -- '--(ro-)?bind[^#]*(\$HOME|"\$runtime_dir"[[:space:]]+"\$runtime_dir")' "$launcher"
 
-          # bwrap must create its synthetic procfs after unsharing the PID and
-          # user namespaces. systemd's ProtectKernelTunables mount topology
-          # makes that nested proc mount fail with EPERM, so the outer unit
-          # must leave it disabled while the capability-dropped inner sandbox
-          # remains responsible for procfs isolation.
+          # bwrap must create its own PID/user/UTS/mount namespaces. The outer
+          # procfs transforms, and ProtectHostname combined with systemd's
+          # required mount namespace, make that nested proc mount fail with
+          # EPERM. Keep those outer controls disabled while the inner sandbox
+          # retains namespace isolation and the compatible syslog denial.
           grep -F -- 'ProtectKernelTunables = false;' "$module_nix"
+          grep -F -- 'ProtectKernelLogs = false;' "$module_nix"
+          grep -F -- 'ProtectHostname = false;' "$module_nix"
+          grep -F -- 'SystemCallFilter = [ "~syslog" ];' "$module_nix"
           grep -Fx -- 'ProtectKernelTunables=no' "$unit"
+          grep -Fx -- 'ProtectKernelLogs=no' "$unit"
+          grep -Fx -- 'ProtectHostname=no' "$unit"
+          grep -Fx -- 'SystemCallFilter=~syslog' "$unit"
 
           grep -F -- 'SSH_AUTH_SOCK is present' "$probe"
           grep -F -- 'cannot stat forbidden dummy marker' "$probe"
@@ -195,6 +203,7 @@ json.dump(sorted(leaf_paths(DEFAULT_CONFIG)), sys.stdout, indent=2)
           test -x ${korgoContainmentProbe}/bin/korgo-ssh-client-containment-probe
           test -x "$no_dbus_smoke"
           grep -F -- '--unsetenv DBUS_SESSION_BUS_ADDRESS' "$no_dbus_smoke"
+          grep -F -- '--hostname korgo-ssh-client' "$no_dbus_smoke"
           grep -F -- '--ro-bind "$smoke_dir/identity" /run/korgo-ssh/identity' "$no_dbus_smoke"
           grep -F -- "observed?.protocol !== 'korgo-app:'" "$no_dbus_smoke"
           grep -F -- 'result?.resolved !== false' "$no_dbus_smoke"
