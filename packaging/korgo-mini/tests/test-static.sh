@@ -54,6 +54,12 @@ grep -q -- '\[\[ "$port" == 5901 \]\]' "$ROOT/korgo-workspace-session"
 grep -q -- '/usr/local/libexec/korgo-mini/korgo-mini-common' "$ROOT/hermes-korgo"
 grep -q -- '/usr/local/libexec/korgo-mini/korgo-workspace-session' "$ROOT/korgo-workspace"
 grep -q -- "desktop-contract" "$ROOT/hermes-korgo"
+grep -qF -- 'workspace_status' "$ROOT/korgo-workspace"
+grep -qF -- 'grep -zFxq' "$ROOT/korgo-workspace"
+if sed -n '/^  status)/,/^  stop)/p' "$ROOT/korgo-workspace" | grep -qF -- 'korgo_require_root'; then
+  echo 'workspace status must remain a non-root read-only probe' >&2
+  exit 1
+fi
 
 if grep -q -- 'KORGO_RUNTIME_HOST_HOME' "$ROOT/korgo-mini-common"; then
   echo 'regular host home reference found' >&2

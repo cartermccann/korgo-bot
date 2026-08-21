@@ -19,6 +19,41 @@ host home, Docker socket, system D-Bus, or host runtime tree enters the sandbox.
 EOF
 }
 
+workspace_status() {
+  local listeners pid found=false
+
+  korgo_assert_stage_layout
+  korgo_assert_no_direct_stage_conflict
+
+  listeners="$(ss -H -ltn "sport = :$KORGO_VNC_PORT")"
+  [[ -n "$listeners" ]] || { printf 'down: korgo-workspace (no VNC listener)\n' >&2; return 1; }
+  while read -r _state _recv _send local_address _peer; do
+    case "$local_address" in
+      "127.0.0.1:$KORGO_VNC_PORT"|"[::1]:$KORGO_VNC_PORT") ;;
+      *) printf 'down: korgo-workspace (non-loopback VNC listener: %s)\n' "$local_address" >&2; return 1 ;;
+    esac
+  done <<<"$listeners"
+
+  for proc in /proc/[0-9]*; do
+    [[ -r "$proc/comm" && -r "$proc/cmdline" ]] || continue
+    [[ "$(cat "$proc/comm" 2>/dev/null || true)" == Xvnc ]] || continue
+    [[ "$(stat -c %u -- "$proc" 2>/dev/null || true)" == "$KORGO_RUNTIME_UID" ]] || continue
+    grep -zFxq -- ':1' "$proc/cmdline" || continue
+    grep -zFxq -- '-rfbport' "$proc/cmdline" || continue
+    grep -zFxq -- "$KORGO_VNC_PORT" "$proc/cmdline" || continue
+    grep -zFxq -- '-localhost' "$proc/cmdline" || continue
+    grep -zFxq -- 'yes' "$proc/cmdline" || continue
+    grep -zFxq -- '-SecurityTypes' "$proc/cmdline" || continue
+    grep -zFxq -- 'None' "$proc/cmdline" || continue
+    pid="${proc##*/}"
+    found=true
+    break
+  done
+
+  [[ "$found" == true ]] || { printf 'down: korgo-workspace (no owned Xvnc process)\n' >&2; return 1; }
+  printf 'run: korgo-workspace (Xvnc pid %s, loopback port %s)\n' "$pid" "$KORGO_VNC_PORT"
+}
+
 case "${1:-}" in
   ''|wrapper-help)
     print_help
@@ -35,13 +70,7 @@ case "$1" in
     korgo_control_service korgo-workspace "$1"
     ;;
   status)
-    korgo_require_root
-    conflicts="$(korgo_direct_stage_conflicts)"
-    if [[ -n "$conflicts" ]]; then
-      printf 'conflict: unsandboxed staged Hermes pid(s): %s\n' "${conflicts//$'\n'/,}"
-      exit 2
-    fi
-    korgo_control_service korgo-workspace status
+    workspace_status
     ;;
   stop)
     korgo_control_service korgo-workspace stop
