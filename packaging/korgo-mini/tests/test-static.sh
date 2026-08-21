@@ -31,6 +31,11 @@ grep -q -- 'KORGO_HERMES_ARGS\[token_arg_index\]="$sandbox_token_path"' "$ROOT/k
 grep -q -- 'korgo_assert_no_direct_stage_conflict' "$ROOT/hermes-korgo"
 grep -q -- 'exec -a "$0" bwrap' "$ROOT/korgo-mini-common"
 grep -q -- 'cmdline_is_direct_stage_conflict' "$ROOT/korgo-mini-common"
+grep -qF -- 'local dir="$RUNIT_ROOT/$name"' "$ROOT/install-void-mini"
+if grep -qF -- 'local name="$1" foreground="$2" dir="$RUNIT_ROOT/$name"' "$ROOT/install-void-mini"; then
+  echo 'write_service expands name before it is initialized under set -u' >&2
+  exit 1
+fi
 
 grep -q -- '-rfbport "$port"' "$ROOT/korgo-workspace-session"
 grep -q -- '-localhost yes' "$ROOT/korgo-workspace-session"
