@@ -69,6 +69,13 @@ done
   fail "Xvfb did not create a display socket"
 
 uid="$(id -u)"
+gid="$(id -g)"
+user_name="$(id -un)" || fail "cannot resolve smoke user"
+group_name="$(id -gn)" || fail "cannot resolve smoke group"
+passwd_record="${user_name}:x:${uid}:${gid}:Korgo SSH Client Smoke:/var/empty:/bin/false"
+group_record="${group_name}:x:${gid}:"
+exec {passwd_fd}<<<"$passwd_record"
+exec {group_fd}<<<"$group_record"
 bwrap \
   --die-with-parent \
   --new-session \
@@ -83,6 +90,12 @@ bwrap \
   --proc /proc \
   --dev /dev \
   --tmpfs /dev/shm \
+  --perms 0555 \
+  --dir /etc \
+  --perms 0444 \
+  --ro-bind-data "$passwd_fd" /etc/passwd \
+  --perms 0444 \
+  --ro-bind-data "$group_fd" /etc/group \
   --dir /tmp \
   --dir /tmp/.X11-unix \
   --bind "/tmp/.X11-unix/X$display_number" "/tmp/.X11-unix/X$display_number" \

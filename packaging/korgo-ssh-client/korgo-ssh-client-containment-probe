@@ -36,8 +36,25 @@ while (($#)); do
 done
 
 [[ "${HOME:-}" == /var/empty ]] || fail "HOME was not replaced"
+[[ ! -w /etc ]] || fail "synthetic /etc is writable"
+[[ ! -w /etc/passwd ]] || fail "synthetic passwd is writable"
+[[ ! -w /etc/group ]] || fail "synthetic group is writable"
+
+mapfile -t passwd_lines </etc/passwd
+mapfile -t group_lines </etc/group
+[[ "${#passwd_lines[@]}" == 1 ]] || fail "sandbox passwd does not contain exactly one record"
+[[ "${#group_lines[@]}" == 1 ]] || fail "sandbox group does not contain exactly one record"
+
+uid="$(id -u)"
+gid="$(id -g)"
+user_name="$(id -un 2>/dev/null)" || fail "current UID has no sandbox passwd entry"
+group_name="$(id -gn 2>/dev/null)" || fail "current GID has no sandbox group entry"
+expected_passwd="${user_name}:x:${uid}:${gid}:Korgo SSH Client:/var/empty:/bin/false"
+expected_group="${group_name}:x:${gid}:"
+[[ "${passwd_lines[0]}" == "$expected_passwd" ]] || fail "sandbox passwd record is not minimal and exact"
+[[ "${group_lines[0]}" == "$expected_group" ]] || fail "sandbox group record is not minimal and exact"
 [[ -z "${SSH_AUTH_SOCK+x}" ]] || fail "SSH_AUTH_SOCK is present"
-pass "broad HOME and SSH agent environment are absent"
+pass "minimal local account exists while broad HOME and SSH agent environment are absent"
 
 [[ -z "${DBUS_SESSION_BUS_ADDRESS+x}" ]] || fail "DBUS_SESSION_BUS_ADDRESS is present"
 [[ -n "${XDG_RUNTIME_DIR:-}" ]] || fail "XDG_RUNTIME_DIR is absent"

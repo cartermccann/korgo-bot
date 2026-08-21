@@ -34,6 +34,10 @@ boundary instead and sets the fixed inner hostname `korgo-ssh-client`.
 `SystemCallFilter=~syslog` preserves the compatible kernel-log syscall denial.
 The launcher sets `XDG_SESSION_TYPE=wayland` inside the cleared environment;
 Electron 38 and newer removed the older `ELECTRON_OZONE_PLATFORM_HINT` selector.
+Because OpenSSH resolves the calling UID before it parses or dials the remote
+target, the launcher also injects exactly one synthetic passwd/group record
+through read-only anonymous data mounts. It never binds the host account
+databases into Electron's sandbox, and the synthetic `/etc` is non-writable.
 
 ## Inputs
 

@@ -10,7 +10,10 @@ This directory contains the runtime boundary used by
   the environment, and does not bind a home directory, `.ssh`, `.hermes`,
   project tree, SSH agent, or whole runtime directory. It also refuses to run
   outside the exact system-service cgroup, so launching the package binary
-  directly cannot bypass destination-IP controls.
+  directly cannot bypass destination-IP controls. OpenSSH receives one
+  synthetic local passwd/group record through read-only anonymous data mounts;
+  synthetic `/etc` is non-writable and the host account databases are never
+  exposed.
 - `korgo-ssh-client-containment-probe` is a dummy-only filesystem,
   environment, and network assertion tool. The launcher accepts the fixed
   `--containment-probe` switch; it never accepts an arbitrary command.

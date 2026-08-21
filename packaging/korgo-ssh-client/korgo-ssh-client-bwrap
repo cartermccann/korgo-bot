@@ -7,6 +7,9 @@ die() {
 }
 
 uid="$(id -u)"
+gid="$(id -g)"
+user_name="$(id -un)" || die "cannot resolve the configured service user"
+group_name="$(id -gn)" || die "cannot resolve the configured service group"
 runtime_dir="${XDG_RUNTIME_DIR:-}"
 wayland_display="${WAYLAND_DISPLAY:-}"
 host_data_dir="${KORGO_DATA_DIR:-}"
@@ -21,6 +24,12 @@ grep -Eq '(^|/)system\.slice/korgo-ssh-client\.service$' /proc/self/cgroup ||
   die "XDG_RUNTIME_DIR must be the exact per-user runtime directory"
 [[ "$wayland_display" =~ ^wayland-[0-9]+$ ]] ||
   die "WAYLAND_DISPLAY must name one Wayland socket"
+[[ "$uid" =~ ^[0-9]+$ && "$gid" =~ ^[0-9]+$ ]] ||
+  die "service UID and GID must be numeric"
+[[ "$user_name" =~ ^[a-z_][a-z0-9_-]*$ ]] ||
+  die "service user name is unsafe"
+[[ "$group_name" =~ ^[a-z_][a-z0-9_-]*$ ]] ||
+  die "service group name is unsafe"
 [[ -n "$host_data_dir" && "$host_data_dir" == /* ]] ||
   die "KORGO_DATA_DIR must be an absolute dedicated directory"
 [[ -n "$host_cache_dir" && "$host_cache_dir" == /* ]] ||
@@ -52,6 +61,14 @@ if [[ "${1:-}" == "--containment-probe" ]]; then
   shift
 fi
 
+# OpenSSH resolves the local UID before parsing or dialing any remote target.
+# Supply exactly one synthetic account and group through inherited anonymous
+# file descriptors; never expose the host's complete /etc/passwd or /etc/group.
+passwd_record="${user_name}:x:${uid}:${gid}:Korgo SSH Client:/var/empty:/bin/false"
+group_record="${group_name}:x:${gid}:"
+exec {passwd_fd}<<<"$passwd_record"
+exec {group_fd}<<<"$group_record"
+
 # No directory under the host runtime tree is bound. Each required IPC socket
 # is admitted by exact pathname and gets a matching in-sandbox parent.
 bwrap_args=(
@@ -70,6 +87,12 @@ bwrap_args=(
   --tmpfs /dev/shm
   --tmpfs /tmp
   --dir /home
+  --perms 0555
+  --dir /etc
+  --perms 0444
+  --ro-bind-data "$passwd_fd" /etc/passwd
+  --perms 0444
+  --ro-bind-data "$group_fd" /etc/group
   --dir /var
   --dir /var/empty
   --dir /var/lib
