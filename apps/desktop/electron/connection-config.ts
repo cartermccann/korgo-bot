@@ -88,7 +88,7 @@ function isNumericTailscaleIp(value) {
  * keeps accepting aliases and ssh-agent/config defaults; the contained SKU
  * accepts only the numeric Tailscale address and its fixed bind-mounted key.
  */
-function normalizeSshOnlyConfig(entry, { identityPath }) {
+function normalizeSshOnlyConfig(entry, { identityPath, remoteHermesPath: requiredRemoteHermesPath = '' }) {
   if (!entry || typeof entry !== 'object' || entry.mode !== 'ssh') {
     throw new Error('The SSH-only product requires an SSH connection.')
   }
@@ -121,6 +121,10 @@ function normalizeSshOnlyConfig(entry, { identityPath }) {
 
   if (keyPath !== identityPath) {
     throw new Error(`SSH identity file must be ${identityPath}.`)
+  }
+
+  if (requiredRemoteHermesPath && remoteHermesPath !== requiredRemoteHermesPath) {
+    throw new Error(`Remote Hermes path must be ${requiredRemoteHermesPath}.`)
   }
 
   const rawPort = entry.port

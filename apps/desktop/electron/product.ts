@@ -12,14 +12,26 @@ export const BOT_TEMPLATE_REF = 'system/hermes-agent@1.0.0'
 export const BOT_UPDATE_POLICY = 'source-release' as const
 
 export type DesktopProduct = 'bot' | 'hermes'
-export type DesktopSku = DesktopProduct | 'bot-ssh-only'
+export type DesktopSku = DesktopProduct | 'bot-linux-mini' | 'bot-ssh-only'
 
-function resolveDesktopSku(sku: string | undefined, product: string | undefined): DesktopSku {
-  if (sku === 'bot-ssh-only') {
-    return 'bot-ssh-only'
+export function resolveDesktopSku(sku: string | undefined, product: string | undefined): DesktopSku {
+  if (sku && sku !== 'bot' && sku !== 'hermes' && sku !== 'bot-linux-mini' && sku !== 'bot-ssh-only') {
+    throw new Error(`Unknown desktop SKU: ${sku}`)
   }
 
-  return product === 'bot' || sku === 'bot' ? 'bot' : 'hermes'
+  if (product && product !== 'bot' && product !== 'hermes') {
+    throw new Error(`Unknown desktop product: ${product}`)
+  }
+
+  if (sku && product && (sku === 'hermes' ? 'hermes' : 'bot') !== product) {
+    throw new Error(`Mismatched desktop SKU/product: ${sku} cannot use product ${product}`)
+  }
+
+  if (sku === 'bot' || sku === 'hermes' || sku === 'bot-linux-mini' || sku === 'bot-ssh-only') {
+    return sku
+  }
+
+  return product === 'bot' || product === 'hermes' ? product : 'hermes'
 }
 
 /**
@@ -45,7 +57,11 @@ export function isBotProduct(): boolean {
 }
 
 export function isSshOnlyProduct(): boolean {
-  return DESKTOP_SKU === 'bot-ssh-only'
+  return DESKTOP_SKU === 'bot-linux-mini' || DESKTOP_SKU === 'bot-ssh-only'
+}
+
+export function isLinuxMiniProduct(): boolean {
+  return DESKTOP_SKU === 'bot-linux-mini'
 }
 
 /** Bot releases pin their remote template and move client/backend together.

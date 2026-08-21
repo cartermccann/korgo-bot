@@ -1,3 +1,4 @@
+import { SSH_REMOTE_RUNTIME_POLICY } from '@desktop/ssh-remote-runtime-policy'
 import { useMemo, useState } from 'react'
 
 import { isNumericTailscaleIp } from '@/app/settings/ssh-host-selection'
@@ -123,7 +124,7 @@ export function FirstRunSshForm({ onBack, onConnected }: FirstRunSshFormProps) {
   const [host, setHost] = useState('')
   const [user, setUser] = useState('')
   const [port, setPort] = useState('22')
-  const [remoteHermesPath, setRemoteHermesPath] = useState('')
+  const [remoteHermesPath, setRemoteHermesPath] = useState<string>(SSH_REMOTE_RUNTIME_POLICY.fixedHermesPath)
   const [remoteProfile, setRemoteProfile] = useState('')
   const [testing, setTesting] = useState(false)
   const [applying, setApplying] = useState(false)
@@ -301,6 +302,7 @@ export function FirstRunSshForm({ onBack, onConnected }: FirstRunSshFormProps) {
                 setRemoteHermesPath(event.target.value)
               }}
               placeholder="/opt/hermes/bin/hermes"
+              readOnly={SSH_REMOTE_RUNTIME_POLICY.hermesPathReadOnly}
               value={remoteHermesPath}
             />
           </label>

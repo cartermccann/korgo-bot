@@ -1,0 +1,487 @@
+#!/usr/bin/env bash
+# Shared fail-closed runtime helpers for the Void Mini Korgo services.
+
+set -euo pipefail
+
+KORGO_MINI_CONFIG="${KORGO_MINI_CONFIG:-/etc/korgo-mini.conf}"
+KORGO_EXPECTED_HERMES_VERSION="0.20.4"
+KORGO_EXPECTED_HERMES_COMMIT="c820a5d38321a8d870e5b1ed0d89f8b933dd48e8"
+KORGO_EXPECTED_SCHEMA="26"
+
+korgo_die() {
+  printf 'korgo-mini: %s\n' "$*" >&2
+  exit 1
+}
+
+korgo_note() {
+  printf 'korgo-mini: %s\n' "$*" >&2
+}
+
+korgo_require_safe_absolute_path() {
+  local label="$1"
+  local value="$2"
+
+  [[ "$value" == /* ]] || korgo_die "$label must be absolute"
+  [[ "$value" =~ ^/[A-Za-z0-9._/+:-]+$ ]] || korgo_die "$label contains unsafe characters"
+  [[ "$value" != "/" && "$value" != "/home" && "$value" != "/var" ]] ||
+    korgo_die "$label is too broad"
+  [[ "$value" != *'/../'* && "$value" != *'/./'* && "$value" != *'//' ]] ||
+    korgo_die "$label is not normalized"
+}
+
+korgo_load_config() {
+  [[ -f "$KORGO_MINI_CONFIG" && ! -L "$KORGO_MINI_CONFIG" ]] ||
+    korgo_die "missing root-owned config: $KORGO_MINI_CONFIG"
+  [[ "$(stat -c %u -- "$KORGO_MINI_CONFIG")" == 0 ]] ||
+    korgo_die "config must be owned by root"
+  (( (8#$(stat -c %a -- "$KORGO_MINI_CONFIG") & 8#022) == 0 )) ||
+    korgo_die "config must not be group/world writable"
+
+  # The file is root-owned and non-writable by the runtime user.
+  # shellcheck disable=SC1090
+  source "$KORGO_MINI_CONFIG"
+
+  : "${KORGO_STAGE_ROOT:?missing KORGO_STAGE_ROOT}"
+  : "${KORGO_RUNTIME_USER:?missing KORGO_RUNTIME_USER}"
+  : "${KORGO_VNC_PORT:?missing KORGO_VNC_PORT}"
+
+  [[ "$KORGO_RUNTIME_USER" =~ ^[a-z_][a-z0-9_-]*$ ]] ||
+    korgo_die "runtime user is unsafe"
+  [[ "$KORGO_VNC_PORT" == 5901 ]] ||
+    korgo_die "VNC port must remain the reviewed loopback-only port 5901"
+  korgo_require_safe_absolute_path KORGO_STAGE_ROOT "$KORGO_STAGE_ROOT"
+
+  KORGO_RUNTIME_UID="$(id -u "$KORGO_RUNTIME_USER" 2>/dev/null)" ||
+    korgo_die "runtime user does not exist: $KORGO_RUNTIME_USER"
+  KORGO_RUNTIME_GROUP="$(id -gn "$KORGO_RUNTIME_USER" 2>/dev/null)" ||
+    korgo_die "cannot resolve runtime group"
+  KORGO_RUNTIME_GID="$(id -g "$KORGO_RUNTIME_USER" 2>/dev/null)" ||
+    korgo_die "cannot resolve runtime gid"
+  KORGO_AGENT_ROOT="$KORGO_STAGE_ROOT/hermes-agent"
+  KORGO_VENV_ROOT="$KORGO_STAGE_ROOT/venvs/hermes"
+  KORGO_TENANT_ROOT="$KORGO_STAGE_ROOT/tenant"
+  KORGO_TENANT_HOME="$KORGO_TENANT_ROOT/home"
+  KORGO_TENANT_HERMES_HOME="$KORGO_TENANT_ROOT/hermes"
+  KORGO_TENANT_WORKSPACE="$KORGO_TENANT_ROOT/workspace"
+  KORGO_TENANT_RUNTIME="$KORGO_TENANT_ROOT/runtime"
+  KORGO_TENANT_X11="$KORGO_TENANT_RUNTIME/X11-unix"
+  KORGO_TENANT_LOGS="$KORGO_TENANT_ROOT/logs"
+  KORGO_DESKTOP_LOCK_DIR="$KORGO_TENANT_HOME/.hermes/desktop-ssh"
+  KORGO_TENANT_MARKER="$KORGO_TENANT_ROOT/.korgo-mini-tenant-v1"
+}
+
+korgo_require_runtime_user() {
+  [[ "$(id -u)" == "$KORGO_RUNTIME_UID" ]] ||
+    korgo_die "sandbox launch must run as $KORGO_RUNTIME_USER"
+}
+
+korgo_require_root() {
+  [[ "$(id -u)" == 0 ]] || korgo_die "service control requires root"
+}
+
+korgo_assert_secure_directory() {
+  local path="$1"
+  local mode="$2"
+
+  [[ -d "$path" && ! -L "$path" ]] || korgo_die "missing safe directory: $path"
+  [[ "$(stat -c %u -- "$path")" == "$KORGO_RUNTIME_UID" ]] ||
+    korgo_die "wrong owner for $path"
+  [[ "$(stat -c %a -- "$path")" == "$mode" ]] ||
+    korgo_die "wrong mode for $path (expected $mode)"
+}
+
+korgo_assert_stage_layout() {
+  [[ -f "$KORGO_TENANT_MARKER" && ! -L "$KORGO_TENANT_MARKER" ]] ||
+    korgo_die "tenant marker is missing; run the root installer first"
+  [[ "$(stat -c %u -- "$KORGO_TENANT_MARKER")" == 0 && "$(stat -c %a -- "$KORGO_TENANT_MARKER")" == 444 ]] ||
+    korgo_die "tenant marker must be root-owned mode 0444"
+  korgo_assert_secure_directory "$KORGO_TENANT_HOME" 700
+  korgo_assert_secure_directory "$KORGO_TENANT_HOME/.hermes" 700
+  korgo_assert_secure_directory "$KORGO_TENANT_HERMES_HOME" 700
+  korgo_assert_secure_directory "$KORGO_TENANT_WORKSPACE" 700
+  korgo_assert_secure_directory "$KORGO_TENANT_RUNTIME" 700
+  korgo_assert_secure_directory "$KORGO_TENANT_LOGS" 700
+  [[ -d "$KORGO_TENANT_X11" && ! -L "$KORGO_TENANT_X11" ]] ||
+    korgo_die "X11 runtime directory is missing"
+  [[ "$(stat -c %u -- "$KORGO_TENANT_X11")" == "$KORGO_RUNTIME_UID" ]] ||
+    korgo_die "X11 runtime directory has the wrong owner"
+  [[ "$(stat -c %a -- "$KORGO_TENANT_X11")" == 1777 ]] ||
+    korgo_die "X11 runtime directory must be mode 1777"
+
+  [[ -d "$KORGO_AGENT_ROOT/.git" && ! -L "$KORGO_AGENT_ROOT" ]] ||
+    korgo_die "pinned Hermes checkout is missing"
+  [[ -x "$KORGO_VENV_ROOT/bin/python" && -f "$KORGO_VENV_ROOT/bin/hermes" ]] ||
+    korgo_die "pinned Hermes virtualenv is missing"
+
+  local commit version schema
+  commit="$(git -C "$KORGO_AGENT_ROOT" rev-parse --verify 'HEAD^{commit}')" ||
+    korgo_die "cannot resolve Hermes commit"
+  [[ "$commit" == "$KORGO_EXPECTED_HERMES_COMMIT" ]] ||
+    korgo_die "Hermes commit mismatch: expected $KORGO_EXPECTED_HERMES_COMMIT"
+  git -C "$KORGO_AGENT_ROOT" diff --quiet --no-ext-diff -- ||
+    korgo_die "Hermes checkout has unstaged tracked changes"
+  git -C "$KORGO_AGENT_ROOT" diff --cached --quiet --no-ext-diff -- ||
+    korgo_die "Hermes checkout has staged changes"
+
+  version="$(sed -n 's/^__version__ = "\([^"]*\)"/\1/p' "$KORGO_AGENT_ROOT/hermes_cli/__init__.py" | head -1)"
+  schema="$(sed -n 's/^SCHEMA_VERSION = \([0-9][0-9]*\)$/\1/p' "$KORGO_AGENT_ROOT/hermes_state_common.py" | head -1)"
+  [[ "$version" == "$KORGO_EXPECTED_HERMES_VERSION" ]] ||
+    korgo_die "Hermes version mismatch: expected $KORGO_EXPECTED_HERMES_VERSION"
+  [[ "$schema" == "$KORGO_EXPECTED_SCHEMA" ]] ||
+    korgo_die "Hermes schema mismatch: expected $KORGO_EXPECTED_SCHEMA"
+}
+
+korgo_cmdline_is_direct_stage_conflict() {
+  local cmdline="$1"
+  local arg next after_next index
+  local venv_python=false
+  local -a argv=()
+
+  mapfile -d '' -t argv <"$cmdline" 2>/dev/null || return 1
+  [[ ${#argv[@]} -gt 0 ]] || return 1
+
+  case "${argv[0]}" in
+    "$KORGO_VENV_ROOT/bin/python"|"$KORGO_VENV_ROOT/bin/python"[0-9.]*)
+      venv_python=true
+      ;;
+  esac
+
+  for ((index = 0; index < ${#argv[@]}; index++)); do
+    arg="${argv[index]}"
+    next="${argv[index + 1]:-}"
+    after_next="${argv[index + 2]:-}"
+
+    # A venv console script can appear as argv[0], or the kernel can expand its
+    # shebang into `venv/bin/python STAGE/.../hermes`. Treat either as direct.
+    if [[ "$arg" == "$KORGO_STAGE_ROOT/"* && "${arg##*/}" == hermes ]]; then
+      [[ "$next" == serve || ( "$next" == gateway && "$after_next" == run ) ]] && return 0
+    fi
+
+    # Also fail closed for `python -m ... serve` from the dedicated stage venv.
+    if [[ "$venv_python" == true ]]; then
+      [[ "$arg" == serve || ( "$arg" == gateway && "$next" == run ) ]] && return 0
+    fi
+  done
+
+  return 1
+}
+
+korgo_direct_stage_conflicts() {
+  local proc pid
+
+  for proc in /proc/[0-9]*/cmdline; do
+    [[ -r "$proc" ]] || continue
+    pid="${proc#/proc/}"
+    pid="${pid%/cmdline}"
+    # Managed launches use /opt/korgo-venv inside bubblewrap, never the host
+    # stage paths detected here.
+    if korgo_cmdline_is_direct_stage_conflict "$proc"; then
+      printf '%s\n' "$pid"
+    fi
+  done
+}
+
+korgo_assert_no_direct_stage_conflict() {
+  local conflicts
+  conflicts="$(korgo_direct_stage_conflicts)"
+  [[ -z "$conflicts" ]] ||
+    korgo_die "conflicting unsandboxed staged Hermes process(es): ${conflicts//$'\n'/,}; stop them through their current owner before continuing"
+}
+
+korgo_control_service() {
+  local service="$1"
+  local action="$2"
+  local service_dir="/etc/sv/$service"
+  local service_link="/var/service/$service"
+
+  [[ -d "$service_dir" && ! -L "$service_dir" ]] ||
+    korgo_die "service is not installed: $service"
+  [[ ! -e "$service_link" || -L "$service_link" ]] ||
+    korgo_die "active service path is not a symlink: $service_link"
+  if [[ -L "$service_link" && "$(readlink -- "$service_link")" != "$service_dir" ]]; then
+    korgo_die "active service symlink is foreign: $service_link"
+  fi
+
+  case "$action" in
+    status)
+      [[ -L "$service_link" ]] || korgo_die "service is not enabled: $service"
+      sv status "$service_link"
+      ;;
+    start)
+      korgo_require_root
+      [[ -L "$service_link" ]] || korgo_die "service is not enabled: $service"
+      rm -f -- "$service_dir/down"
+      sv up "$service_link"
+      sv check "$service_link"
+      ;;
+    ensure)
+      korgo_require_root
+      [[ -L "$service_link" ]] || korgo_die "service is not enabled: $service"
+      if sv check "$service_link" >/dev/null 2>&1; then
+        korgo_note "$service is already running"
+      else
+        rm -f -- "$service_dir/down"
+        sv up "$service_link"
+        sv check "$service_link"
+      fi
+      ;;
+    stop)
+      korgo_require_root
+      install -m 0644 /dev/null "$service_dir/down"
+      if [[ -L "$service_link" ]]; then
+        sv down "$service_link"
+      else
+        korgo_note "$service is already disabled and held down"
+      fi
+      ;;
+    *)
+      korgo_die "unsupported service action: $action"
+      ;;
+  esac
+}
+
+declare -ag KORGO_BWRAP_ARGS=()
+declare -Ag KORGO_BWRAP_DIRS=()
+KORGO_PASSWD_FD=''
+KORGO_GROUP_FD=''
+KORGO_TOKEN_FD=''
+declare -ag KORGO_HERMES_ARGS=()
+
+korgo_bwrap_dir() {
+  local path="$1"
+  local mode="${2:-0755}"
+
+  [[ "$path" == /* && "$path" != / ]] || return 0
+  if [[ -z "${KORGO_BWRAP_DIRS[$path]:-}" ]]; then
+    KORGO_BWRAP_ARGS+=(--perms "$mode" --dir "$path")
+    KORGO_BWRAP_DIRS[$path]=1
+  fi
+}
+
+korgo_bwrap_parent_chain() {
+  local path="$1"
+  local parent part current=''
+  local -a parts=()
+
+  parent="$(dirname -- "$path")"
+  IFS='/' read -r -a parts <<<"${parent#/}"
+  for part in "${parts[@]}"; do
+    [[ -n "$part" ]] || continue
+    current="$current/$part"
+    korgo_bwrap_dir "$current"
+  done
+}
+
+korgo_bwrap_bind_if_present() {
+  local source="$1"
+  local target="${2:-$1}"
+
+  [[ -e "$source" || -L "$source" ]] || return 0
+  korgo_bwrap_parent_chain "$target"
+  if [[ -L "$source" ]]; then
+    KORGO_BWRAP_ARGS+=(--symlink "$(readlink -- "$source")" "$target")
+  else
+    KORGO_BWRAP_ARGS+=(--ro-bind "$source" "$target")
+  fi
+}
+
+korgo_build_base_bwrap() {
+  local die_with_parent="$1"
+  local passwd_record group_record safe_path
+
+  passwd_record="korgo:x:${KORGO_RUNTIME_UID}:${KORGO_RUNTIME_GID}:Korgo Mini:/home/korgo:/bin/false"
+  group_record="korgo:x:${KORGO_RUNTIME_GID}:"
+  exec {KORGO_PASSWD_FD}<<<"$passwd_record"
+  exec {KORGO_GROUP_FD}<<<"$group_record"
+
+  KORGO_BWRAP_ARGS=(
+    --new-session
+    --unshare-all
+    --share-net
+    --hostname korgo-mini
+    --cap-drop ALL
+    --clearenv
+  )
+  KORGO_BWRAP_DIRS=()
+  if [[ "$die_with_parent" == yes ]]; then
+    KORGO_BWRAP_ARGS+=(--die-with-parent)
+  fi
+
+  KORGO_BWRAP_ARGS+=(
+    --proc /proc
+    --dev /dev
+    --tmpfs /dev/shm
+    --tmpfs /tmp
+  )
+  korgo_bwrap_dir /etc 0555
+  KORGO_BWRAP_ARGS+=(
+    --perms 0444 --ro-bind-data "$KORGO_PASSWD_FD" /etc/passwd
+    --perms 0444 --ro-bind-data "$KORGO_GROUP_FD" /etc/group
+  )
+
+  for safe_path in /usr /bin /sbin /lib /lib64; do
+    korgo_bwrap_bind_if_present "$safe_path"
+  done
+  for safe_path in \
+    /etc/ssl /etc/pki /etc/fonts /etc/resolv.conf /etc/hosts \
+    /etc/nsswitch.conf /etc/localtime /etc/machine-id /etc/ld.so.cache \
+    /etc/ca-certificates.conf; do
+    korgo_bwrap_bind_if_present "$safe_path"
+  done
+
+  korgo_bwrap_parent_chain "$KORGO_AGENT_ROOT"
+  KORGO_BWRAP_ARGS+=(--ro-bind "$KORGO_AGENT_ROOT" "$KORGO_AGENT_ROOT")
+  korgo_bwrap_dir /opt
+  KORGO_BWRAP_ARGS+=(--ro-bind "$KORGO_VENV_ROOT" /opt/korgo-venv)
+
+  korgo_bwrap_dir /home
+  korgo_bwrap_dir /home/korgo 0700
+  korgo_bwrap_dir /state
+  korgo_bwrap_dir /workspace 0700
+  korgo_bwrap_dir /runtime 0700
+  korgo_bwrap_dir /var
+  korgo_bwrap_dir /var/tmp 0700
+  KORGO_BWRAP_ARGS+=(
+    --bind "$KORGO_TENANT_HOME" /home/korgo
+    # The Desktop writes its host-side ownership records below tenant HOME so
+    # the regular host home remains untouched. Hide that entire host `.hermes`
+    # subtree in every sandbox; a serve launch adds only its one token below.
+    --tmpfs /home/korgo/.hermes
+    --chmod 0700 /home/korgo/.hermes
+    --bind "$KORGO_TENANT_HERMES_HOME" /state/hermes
+    --bind "$KORGO_TENANT_WORKSPACE" /workspace
+    --bind "$KORGO_TENANT_RUNTIME" /runtime
+    --bind "$KORGO_TENANT_X11" /tmp/.X11-unix
+    --setenv HOME /home/korgo
+    --setenv HERMES_HOME /state/hermes
+    --setenv XDG_CONFIG_HOME /home/korgo/.config
+    --setenv XDG_DATA_HOME /home/korgo/.local/share
+    --setenv XDG_CACHE_HOME /home/korgo/.cache
+    --setenv XDG_RUNTIME_DIR /runtime
+    --setenv DISPLAY :1
+    --setenv XAUTHORITY /home/korgo/.Xauthority
+    --setenv USER korgo
+    --setenv LOGNAME korgo
+    --setenv LANG C.UTF-8
+    --setenv LC_ALL C.UTF-8
+    --setenv PATH /opt/korgo-venv/bin:/usr/local/bin:/usr/bin:/bin
+    --setenv GIT_CONFIG_NOSYSTEM 1
+    --setenv TMPDIR /tmp
+    --chdir /workspace
+  )
+}
+
+korgo_prepare_session_token_mount() {
+  local token_path='' arg previous='' found=false
+  local relative owner_id file_name nonce owner_dir
+  local sandbox_token_root=/home/korgo/.hermes/desktop-ssh
+  local sandbox_token_path=''
+  local token_arg_index=-1 token_arg_style=''
+
+  KORGO_HERMES_ARGS=()
+
+  for arg in "$@"; do
+    if [[ "$previous" == --ssh-session-token-file ]]; then
+      token_path="$arg"
+      token_arg_index="${#KORGO_HERMES_ARGS[@]}"
+      token_arg_style=separate
+      KORGO_HERMES_ARGS+=("$arg")
+      previous=''
+      continue
+    fi
+    case "$arg" in
+      --ssh-session-token-file)
+        [[ "$found" == false ]] || korgo_die "duplicate --ssh-session-token-file argument"
+        found=true
+        previous="$arg"
+        KORGO_HERMES_ARGS+=("$arg")
+        ;;
+      --ssh-session-token-file=*)
+        [[ "$found" == false ]] || korgo_die "duplicate --ssh-session-token-file argument"
+        found=true
+        token_path="${arg#*=}"
+        token_arg_index="${#KORGO_HERMES_ARGS[@]}"
+        token_arg_style=equals
+        KORGO_HERMES_ARGS+=("$arg")
+        ;;
+      *)
+        KORGO_HERMES_ARGS+=("$arg")
+        ;;
+    esac
+  done
+  [[ -z "$previous" ]] || korgo_die "--ssh-session-token-file is missing its path"
+  [[ -n "$token_path" ]] || return 0
+
+  case "$token_path" in
+    "$KORGO_DESKTOP_LOCK_DIR"/*/*.token) ;;
+    *) korgo_die "session token path is outside the fixed desktop ownership tree" ;;
+  esac
+  relative="${token_path#"$KORGO_DESKTOP_LOCK_DIR/"}"
+  owner_id="${relative%%/*}"
+  file_name="${relative#*/}"
+  nonce="${file_name%.token}"
+  [[ "$owner_id" =~ ^[0-9a-f]{32}$ && "$nonce" =~ ^[0-9a-f]{16}$ && "$file_name" == "$nonce.token" ]] ||
+    korgo_die "session token path does not match the ownership contract"
+  owner_dir="$KORGO_DESKTOP_LOCK_DIR/$owner_id"
+  [[ -d "$KORGO_TENANT_HOME/.hermes" && ! -L "$KORGO_TENANT_HOME/.hermes" ]] ||
+    korgo_die "tenant .hermes directory is missing or unsafe"
+  [[ "$(stat -c %u -- "$KORGO_TENANT_HOME/.hermes")" == "$KORGO_RUNTIME_UID" ]] ||
+    korgo_die "tenant .hermes directory owner mismatch"
+  [[ -d "$KORGO_DESKTOP_LOCK_DIR" && ! -L "$KORGO_DESKTOP_LOCK_DIR" ]] ||
+    korgo_die "desktop ownership root is missing or unsafe"
+  [[ "$(stat -c %u -- "$KORGO_DESKTOP_LOCK_DIR")" == "$KORGO_RUNTIME_UID" ]] ||
+    korgo_die "desktop ownership root owner mismatch"
+  (( (8#$(stat -c %a -- "$KORGO_DESKTOP_LOCK_DIR") & 8#022) == 0 )) ||
+    korgo_die "desktop ownership root must not be group/world writable"
+  [[ -d "$owner_dir" && ! -L "$owner_dir" ]] ||
+    korgo_die "desktop ownership directory is missing or unsafe"
+  [[ "$(stat -c %u -- "$owner_dir")" == "$KORGO_RUNTIME_UID" && "$(stat -c %a -- "$owner_dir")" == 700 ]] ||
+    korgo_die "desktop ownership directory must be runtime-owned mode 0700"
+  [[ -f "$token_path" && ! -L "$token_path" ]] || korgo_die "session token is missing or unsafe"
+  exec {KORGO_TOKEN_FD}<"$token_path"
+  local token_fd_path="/proc/$BASHPID/fd/$KORGO_TOKEN_FD"
+  [[ "$(stat -Lc %u -- "$token_fd_path")" == "$KORGO_RUNTIME_UID" ]] ||
+    korgo_die "session token owner mismatch"
+  [[ "$(stat -Lc %a -- "$token_fd_path")" == 600 ]] ||
+    korgo_die "session token mode must be 0600"
+  [[ "$(stat -Lc %s -- "$token_fd_path")" == 64 ]] || korgo_die "session token must be exactly 64 bytes"
+  LC_ALL=C grep -Eq '^[0-9a-f]{64}$' "$token_fd_path" || korgo_die "session token has invalid content"
+  [[ "$(stat -Lc '%d:%i' -- "$token_path")" == "$(stat -Lc '%d:%i' -- "$token_fd_path")" ]] ||
+    korgo_die "session token changed while it was being opened"
+
+  # Match Hermes's one-shot semantics: consume the validated host directory
+  # entry while retaining the already-open descriptor for the sandbox copy.
+  rm -f -- "$token_path"
+  [[ ! -e "$token_path" && ! -L "$token_path" ]] || korgo_die "session token could not be consumed"
+
+  # The host path is never passed to bubblewrap. Present the open file below
+  # the synthetic HOME-based path Hermes validates. The base tmpfs masks the
+  # host `.hermes`, so sibling locks, tokens, and logs are invisible.
+  sandbox_token_path="$sandbox_token_root/$relative"
+  korgo_bwrap_dir "$sandbox_token_root" 0700
+  korgo_bwrap_dir "$sandbox_token_root/$owner_id" 0700
+  KORGO_BWRAP_ARGS+=(--perms 0600 --ro-bind-data "$KORGO_TOKEN_FD" "$sandbox_token_path")
+
+  if [[ "$token_arg_style" == separate ]]; then
+    KORGO_HERMES_ARGS[token_arg_index]="$sandbox_token_path"
+  else
+    KORGO_HERMES_ARGS[token_arg_index]="--ssh-session-token-file=$sandbox_token_path"
+  fi
+}
+
+korgo_exec_hermes_sandbox() {
+  local die_with_parent="$1"
+  local desktop_mode="${HERMES_DESKTOP:-}"
+  shift
+
+  korgo_build_base_bwrap "$die_with_parent"
+  korgo_prepare_session_token_mount "$@"
+  if [[ "$desktop_mode" == 1 ]]; then
+    KORGO_BWRAP_ARGS+=(--setenv HERMES_DESKTOP 1)
+  fi
+
+  # argv[0] remains the configured launcher path so Desktop's nonce-bearing
+  # /proc ownership proof can identify and safely reap its own bwrap process.
+  exec -a "$0" bwrap "${KORGO_BWRAP_ARGS[@]}" -- \
+    /opt/korgo-venv/bin/python /opt/korgo-venv/bin/hermes "${KORGO_HERMES_ARGS[@]}"
+}

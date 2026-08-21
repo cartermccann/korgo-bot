@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# Runs only inside the korgo-workspace bubblewrap namespace.
+
+set -euo pipefail
+
+port="${KORGO_VNC_PORT:-}"
+display="${KORGO_VNC_DISPLAY:-}"
+geometry="${KORGO_VNC_GEOMETRY:-}"
+
+[[ "$port" == 5901 ]] || { echo 'korgo-workspace: invalid VNC port' >&2; exit 1; }
+[[ "$display" == :1 ]] || { echo 'korgo-workspace: invalid X display' >&2; exit 1; }
+[[ "$geometry" =~ ^[0-9]{3,4}x[0-9]{3,4}$ ]] || { echo 'korgo-workspace: invalid geometry' >&2; exit 1; }
+[[ "$HOME" == /home/korgo && "$XAUTHORITY" == /home/korgo/.Xauthority ]] || {
+  echo 'korgo-workspace: tenant environment is not isolated' >&2
+  exit 1
+}
+
+umask 077
+mkdir -p "$HOME/.config" "$HOME/.cache" "$HOME/.local/share"
+touch "$XAUTHORITY"
+chmod 0600 "$XAUTHORITY"
+xauth -f "$XAUTHORITY" remove "$display" >/dev/null 2>&1 || true
+xauth -f "$XAUTHORITY" add "$display" . "$(mcookie)"
+
+vnc_pid=''
+wm_pid=''
+cleanup() {
+  trap - EXIT INT TERM HUP
+  [[ -z "$wm_pid" ]] || kill "$wm_pid" 2>/dev/null || true
+  [[ -z "$vnc_pid" ]] || kill "$vnc_pid" 2>/dev/null || true
+  [[ -z "$wm_pid" ]] || wait "$wm_pid" 2>/dev/null || true
+  [[ -z "$vnc_pid" ]] || wait "$vnc_pid" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM HUP
+
+# `None` is acceptable only because Xvnc is forced to loopback and all remote
+# access is authenticated/encrypted by the strict dedicated SSH connection.
+Xvnc "$display" \
+  -geometry "$geometry" \
+  -depth 24 \
+  -rfbport "$port" \
+  -localhost yes \
+  -SecurityTypes None \
+  -AlwaysShared \
+  -auth "$XAUTHORITY" &
+vnc_pid=$!
+
+ready=false
+for _ in $(seq 1 100); do
+  kill -0 "$vnc_pid" 2>/dev/null || break
+  if [[ -S /tmp/.X11-unix/X1 ]] && ss -H -ltn "sport = :$port" | grep -q "127.0.0.1:$port"; then
+    ready=true
+    break
+  fi
+  sleep 0.05
+done
+[[ "$ready" == true ]] || { echo 'korgo-workspace: Xvnc did not become ready' >&2; exit 1; }
+if ss -H -ltn "sport = :$port" | grep -Eq "(^|[[:space:]])(0\.0\.0\.0|\[::\]|\*):$port([[:space:]]|$)"; then
+  echo 'korgo-workspace: refusing non-loopback VNC listener' >&2
+  exit 1
+fi
+
+dbus-run-session -- openbox &
+wm_pid=$!
+
+set +e
+wait -n "$vnc_pid" "$wm_pid"
+status=$?
+set -e
+exit "$status"

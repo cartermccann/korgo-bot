@@ -161,6 +161,29 @@ class TestCreateProfile:
         assert (profile_dir / ".env").read_text().strip() == "KEY=val"
         assert (profile_dir / "SOUL.md").read_text() == "Be helpful."
 
+    def test_clone_config_can_omit_credentials_without_losing_soul_or_skills(self, profile_env):
+        default_home = profile_env / ".hermes"
+        (default_home / "config.yaml").write_text(
+            "model:\n  provider: sentinel\n  default: sentinel-model\n  api_key: SENTINEL_CONFIG_KEY\n",
+            encoding="utf-8",
+        )
+        (default_home / ".env").write_text("SENTINEL_ENV_KEY=secret\n", encoding="utf-8")
+        (default_home / "SOUL.md").write_text("Credential-free clone soul.\n", encoding="utf-8")
+        (default_home / "skills" / "shared-skill").mkdir(parents=True)
+        (default_home / "skills" / "shared-skill" / "SKILL.md").write_text("shared", encoding="utf-8")
+
+        profile_dir = create_profile(
+            "isolated",
+            clone_config=True,
+            clone_credentials=False,
+            no_alias=True,
+        )
+
+        assert not (profile_dir / "config.yaml").exists()
+        assert "SENTINEL_ENV_KEY" not in (profile_dir / ".env").read_text(encoding="utf-8")
+        assert (profile_dir / "SOUL.md").read_text(encoding="utf-8") == "Credential-free clone soul.\n"
+        assert (profile_dir / "skills" / "shared-skill" / "SKILL.md").read_text(encoding="utf-8") == "shared"
+
 
 
 
@@ -945,5 +968,4 @@ class TestProfilesToServe:
 
         assert set(serve) == {"default", "worker"}
         assert serve["worker"] == get_profile_dir("worker")
-
 

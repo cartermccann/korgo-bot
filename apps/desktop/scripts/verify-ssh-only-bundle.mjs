@@ -54,6 +54,18 @@ export const BANNED_ARTIFACT_MARKERS = Object.freeze([
   'HERMES_DESKTOP_CDP_PORT'
 ])
 
+// The fallback SSH client must not silently acquire the Mini computer proxy or
+// its fixed remote runtime contract. These are Mini-only main/preload bytes,
+// not merely renderer navigation markers.
+export const NON_MINI_BANNED_ARTIFACT_MARKERS = Object.freeze([
+  'hermes:mini-desktop:start',
+  'hermes:mini-desktop:send',
+  'hermes:mini-desktop:ack',
+  'hermes:mini-desktop:close',
+  '/usr/local/bin/korgo-workspace',
+  '/usr/local/bin/hermes-korgo'
+])
+
 // These are renderer-only because generic connection persistence in main may
 // still understand legacy records during migration. They must never be
 // present in the compiled SSH renderer, where they would prove that a
@@ -142,6 +154,8 @@ export const BANNED_RENDERER_MARKERS = Object.freeze([
   '/api/learning/node',
   '/api/plugins/',
   'profiles.list',
+  'profiles.describe',
+  'profiles.delete',
   'profiles.get_asset',
   'profiles.configure',
   'profiles.create',
@@ -228,7 +242,62 @@ export const REQUIRED_IDENTITY_MARKERS = Object.freeze([
   'Mini Tailscale IP',
   'New session'
 ])
+export const MINI_ALLOWED_RENDERER_MARKERS = Object.freeze([
+  '/api/cron/jobs',
+  'The default profile cannot be deleted.',
+  'createProfile',
+  'cron.manage',
+  'deleteCronJob',
+  'deleteProfile',
+  'hermes-bots:pane-v2',
+  'pauseCronJob',
+  'profiles.configure',
+  'profiles.create',
+  'profiles.delete',
+  'profiles.describe',
+  'profiles.get_asset',
+  'profiles.list',
+  'profiles.set_asset',
+  'renameProfile',
+  'resumeCronJob',
+  'triggerCronJob',
+  'updateProfileSoul'
+])
+export const REQUIRED_MINI_IDENTITY_MARKERS = Object.freeze([
+  'bot-linux-mini',
+  'Korgo Bot',
+  'Connect existing Hermes over SSH',
+  'Mini Tailscale IP',
+  'New session',
+  'hermes-bots:pane-v2',
+  'Bot Chat',
+  'hermes:mini-desktop:start',
+  'hermes:mini-desktop:send',
+  'hermes:mini-desktop:ack',
+  'hermes:mini-desktop:close',
+  '/usr/local/bin/korgo-workspace',
+  '/usr/local/bin/hermes-korgo',
+  'cron.manage'
+])
 const MAX_WALK_ENTRIES = 100_000
+
+function artifactPolicy(options = {}) {
+  if (!options.mini) {
+    return {
+      bannedArtifactMarkers: [...BANNED_ARTIFACT_MARKERS, ...NON_MINI_BANNED_ARTIFACT_MARKERS],
+      bannedRendererMarkers: BANNED_RENDERER_MARKERS,
+      requiredIdentityMarkers: REQUIRED_IDENTITY_MARKERS
+    }
+  }
+
+  const allowed = new Set(MINI_ALLOWED_RENDERER_MARKERS)
+
+  return {
+    bannedArtifactMarkers: BANNED_ARTIFACT_MARKERS,
+    bannedRendererMarkers: BANNED_RENDERER_MARKERS.filter(marker => !allowed.has(marker)),
+    requiredIdentityMarkers: REQUIRED_MINI_IDENTITY_MARKERS
+  }
+}
 
 function validateRendererCsp(contents, relative) {
   const html = contents.toString('utf8')
@@ -289,7 +358,7 @@ function locateResourceDirectories(artifactRoot) {
   return [...new Set(resources)]
 }
 
-function scanResourceDirectory(resourcesDir) {
+function scanResourceDirectory(resourcesDir, policy) {
   const findings = []
   const identityFound = new Set()
   let rendererHtmlCount = 0
@@ -318,12 +387,12 @@ function scanResourceDirectory(resourcesDir) {
 
     if (!entry.isFile()) return
     const contents = fs.readFileSync(absolute)
-    for (const marker of BANNED_ARTIFACT_MARKERS) {
+    for (const marker of policy.bannedArtifactMarkers) {
       if (contents.includes(Buffer.from(marker))) {
         findings.push(`${relative}: banned packaged marker ${JSON.stringify(marker)}`)
       }
     }
-    for (const marker of REQUIRED_IDENTITY_MARKERS) {
+    for (const marker of policy.requiredIdentityMarkers) {
       if (contents.includes(Buffer.from(marker))) identityFound.add(marker)
     }
 
@@ -332,7 +401,7 @@ function scanResourceDirectory(resourcesDir) {
     const rendererHtml = /(?:^|\/)dist\/index\.html$/i.test(normalizedRelative)
 
     if (rendererAsset) {
-      for (const marker of BANNED_RENDERER_MARKERS) {
+      for (const marker of policy.bannedRendererMarkers) {
         if (contents.includes(Buffer.from(marker))) {
           findings.push(`${relative}: banned SSH renderer marker ${JSON.stringify(marker)}`)
         }
@@ -378,7 +447,7 @@ function extractAppImage(appImagePath) {
   return { root, cleanup: () => fs.rmSync(extractionDir, { recursive: true, force: true }) }
 }
 
-export function verifySshOnlyArtifact(inputPath) {
+export function verifySshOnlyArtifact(inputPath, options = {}) {
   const resolved = path.resolve(inputPath)
   if (!fs.existsSync(resolved)) {
     return { ok: false, findings: [`${inputPath}: artifact path does not exist`] }
@@ -400,14 +469,15 @@ export function verifySshOnlyArtifact(inputPath) {
       return { ok: false, findings: [`${inputPath}: no packaged resources/app.asar found`] }
     }
 
+    const policy = artifactPolicy(options)
     const findings = []
     const identityFound = new Set()
     for (const resourcesDir of resourcesDirs) {
-      const result = scanResourceDirectory(resourcesDir)
+      const result = scanResourceDirectory(resourcesDir, policy)
       findings.push(...result.findings)
       for (const marker of result.identityFound) identityFound.add(marker)
     }
-    for (const marker of REQUIRED_IDENTITY_MARKERS) {
+    for (const marker of policy.requiredIdentityMarkers) {
       if (!identityFound.has(marker)) {
         findings.push(`${inputPath}: missing required packaged identity marker ${JSON.stringify(marker)}`)
       }
@@ -421,14 +491,17 @@ export function verifySshOnlyArtifact(inputPath) {
 }
 
 function main(argv) {
-  if (argv.length === 0) {
-    console.error('usage: verify-ssh-only-bundle.mjs <unpacked-app-or-AppImage> [...]')
+  const mini = argv[0] === '--mini'
+  const artifactPaths = mini ? argv.slice(1) : argv
+
+  if (artifactPaths.length === 0) {
+    console.error('usage: verify-ssh-only-bundle.mjs [--mini] <unpacked-app-or-AppImage> [...]')
     return 2
   }
 
   let failed = false
-  for (const artifactPath of argv) {
-    const result = verifySshOnlyArtifact(artifactPath)
+  for (const artifactPath of artifactPaths) {
+    const result = verifySshOnlyArtifact(artifactPath, { mini })
     if (result.ok) {
       console.log(`[verify-ssh-only-bundle] PASS ${artifactPath}`)
       continue

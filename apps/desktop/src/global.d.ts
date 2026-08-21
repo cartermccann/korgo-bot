@@ -1,5 +1,6 @@
 import type { GatewayWsUrlResult } from '@hermes/shared'
 
+import type { MiniDesktopBridge } from './lib/mini-desktop-channel'
 import type { GatewayProxyBridge } from './lib/native-gateway-socket'
 import type { WakeIndicatorState } from './lib/wake-indicator'
 import type {
@@ -33,6 +34,9 @@ declare global {
       // Present only in the SSH-only preload. The full product retains the
       // direct fresh-URL resolver above for compatibility.
       gatewayProxy?: GatewayProxyBridge
+      // Present only in the Linux Mini SKU. It carries raw VNC bytes through
+      // main-owned SSH; no URL, password, or private-key path enters renderer.
+      miniDesktop?: MiniDesktopBridge
       // Open (or focus) a standalone OS window for a single chat session so
       // the user can work with multiple chats side by side. Returns ok:false
       // with an error code when the sessionId is empty/invalid. `watch` opens

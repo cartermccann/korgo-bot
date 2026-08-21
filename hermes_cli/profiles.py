@@ -1037,6 +1037,7 @@ def create_profile(
     no_alias: bool = False,
     no_skills: bool = False,
     description: Optional[str] = None,
+    clone_credentials: bool = True,
 ) -> Path:
     """Create a new profile directory.
 
@@ -1059,6 +1060,10 @@ def create_profile(
         a marker file so ``hermes update`` skips re-seeding this profile's
         skills. Mutually exclusive with ``clone_config``/``clone_all`` (those
         explicitly copy skills from the source).
+    clone_credentials:
+        When false, a config clone retains SOUL, skills, and curated memory but
+        omits both ``config.yaml`` and ``.env``. This is the credential-free
+        Korgo tenant contract; the default preserves existing CLI behavior.
 
     Returns
     -------
@@ -1117,7 +1122,8 @@ def create_profile(
 
         # Clone config files from source
         if source_dir is not None:
-            for filename in _CLONE_CONFIG_FILES:
+            clone_files = _CLONE_CONFIG_FILES if clone_credentials else ("SOUL.md",)
+            for filename in clone_files:
                 src = source_dir / filename
                 if src.exists():
                     dst = profile_dir / filename

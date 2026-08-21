@@ -1,3 +1,4 @@
+import { IPC_CHANNEL_POLICY as COMPILE_TIME_SSH_ONLY_IPC_CHANNEL_POLICY } from './ipc-channel-policy.ssh-only'
 import type { IpcChannelPolicy, IpcChannelPrivilege, IpcChannelRule, IpcRegistrationKind } from './ipc-policy'
 import type { WindowCapability } from './ipc-trust'
 
@@ -488,12 +489,44 @@ export const SSH_ONLY_OMITTED_IPC_CHANNELS = Object.freeze([
   'hermes:uninstall:run'
 ] as const)
 
-const SSH_ONLY_OMITTED_IPC_SET = new Set<string>(SSH_ONLY_OMITTED_IPC_CHANNELS)
+const SSH_ONLY_IPC_CHANNEL_POLICY = COMPILE_TIME_SSH_ONLY_IPC_CHANNEL_POLICY
 
-const SSH_ONLY_IPC_CHANNEL_POLICY = Object.freeze(
-  Object.fromEntries(Object.entries(IPC_CHANNEL_POLICY).filter(([channel]) => !SSH_ONLY_OMITTED_IPC_SET.has(channel)))
-) satisfies IpcChannelPolicy
+const LINUX_MINI_IPC_CHANNEL_POLICY = Object.freeze({
+  ...SSH_ONLY_IPC_CHANNEL_POLICY,
+  'hermes:mini-desktop:start': Object.freeze({
+    capabilities: PRIMARY,
+    kind: 'handle' as const,
+    privilege: 'gateway-runtime' as const
+  }),
+  'hermes:mini-desktop:send': Object.freeze({
+    capabilities: PRIMARY,
+    kind: 'on' as const,
+    privilege: 'gateway-runtime' as const
+  }),
+  'hermes:mini-desktop:ack': Object.freeze({
+    capabilities: PRIMARY,
+    kind: 'on' as const,
+    privilege: 'gateway-runtime' as const
+  }),
+  'hermes:mini-desktop:close': Object.freeze({
+    capabilities: PRIMARY,
+    kind: 'on' as const,
+    privilege: 'gateway-runtime' as const
+  })
+}) satisfies IpcChannelPolicy
 
 export function ipcChannelPolicyForSku(sku: string | undefined): IpcChannelPolicy {
-  return sku === 'bot-ssh-only' ? SSH_ONLY_IPC_CHANNEL_POLICY : IPC_CHANNEL_POLICY
+  if (sku === 'bot-linux-mini') {
+    return LINUX_MINI_IPC_CHANNEL_POLICY
+  }
+
+  if (sku === 'bot-ssh-only') {
+    return SSH_ONLY_IPC_CHANNEL_POLICY
+  }
+
+  if (sku === undefined || sku === 'bot' || sku === 'hermes') {
+    return IPC_CHANNEL_POLICY
+  }
+
+  throw new Error(`Unknown desktop SKU: ${sku}`)
 }

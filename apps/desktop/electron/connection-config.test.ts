@@ -258,6 +258,26 @@ test('SSH-only normalization accepts only numeric Tailscale addresses and the fi
   }
 })
 
+test('Linux Mini normalization pins the reviewed remote launcher path', () => {
+  const identityPath = '/run/korgo-ssh/identity'
+  const remoteHermesPath = '/usr/local/bin/hermes-korgo'
+
+  const base = {
+    mode: 'ssh',
+    host: '100.100.10.20',
+    user: 'cjm',
+    port: 22,
+    keyPath: identityPath,
+    remoteHermesPath
+  }
+
+  assert.equal(normalizeSshOnlyConfig(base, { identityPath, remoteHermesPath })?.remoteHermesPath, remoteHermesPath)
+  assert.throws(
+    () => normalizeSshOnlyConfig({ ...base, remoteHermesPath: '/tmp/hermes' }, { identityPath, remoteHermesPath }),
+    /Remote Hermes path must be/
+  )
+})
+
 test('localProfileEntry preserves inactive SSH drafts but drops Cloud state', () => {
   const ssh = { mode: 'ssh', host: 'box', user: 'alice', remoteHermesPath: '/hermes' }
   assert.deepEqual(localProfileEntry(ssh), { mode: 'local', savedSsh: ssh })

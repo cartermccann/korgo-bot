@@ -52,9 +52,10 @@
         {
           electronArchiveHash ? "sha256-edTv1p8Mzx/BGJHqUHUynHs/rdrXmgjZ+zlbvWMWms8=",
           electronHeadersHash ? "sha256-CyzcARd1+GhWr8ED7HBYW2MYD+tgetqZFMkaivaGvw0=",
+          desktopSku ? "bot-ssh-only",
         }:
         pkgs.callPackage ./korgo-ssh-client.nix {
-          inherit electronArchiveHash electronHeadersHash;
+          inherit desktopSku electronArchiveHash electronHeadersHash;
           hermesNpmLib = full.hermesNpmLib;
         };
     in
@@ -84,8 +85,10 @@
         desktop = full.hermesDesktop;
 
         update-npm-lockfile = full.hermesNpmLib.updateNpmLockfile;
-      } // lib.optionalAttrs (pkgs.stdenv.hostPlatform.isLinux && pkgs.stdenv.hostPlatform.isx86_64) {
+      }
+      // lib.optionalAttrs (pkgs.stdenv.hostPlatform.isLinux && pkgs.stdenv.hostPlatform.isx86_64) {
         korgo-ssh-client = korgoSshClientBuilder { };
+        korgo-linux-mini-client = korgoSshClientBuilder { desktopSku = "bot-linux-mini"; };
       };
     };
 }

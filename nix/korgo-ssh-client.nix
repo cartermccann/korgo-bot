@@ -13,12 +13,15 @@
   netcat-openbsd,
   openssh,
   hermesNpmLib,
+  desktopSku ? "bot-ssh-only",
   electronArchiveHash ? "sha256-edTv1p8Mzx/BGJHqUHUynHs/rdrXmgjZ+zlbvWMWms8=",
   electronHeadersHash ? "sha256-CyzcARd1+GhWr8ED7HBYW2MYD+tgetqZFMkaivaGvw0=",
 }:
 
 let
   electronVersion = "43.4.1";
+  isMini = desktopSku == "bot-linux-mini";
+  packageName = if isMini then "korgo-linux-mini-client" else "korgo-ssh-client";
   isPinnedSha256 =
     hash:
     hash != null
@@ -29,6 +32,9 @@ in
 assert lib.assertMsg stdenv.hostPlatform.isx86_64
   "korgo-ssh-client is currently defined only for the reviewed x86_64 Linux artifact";
 assert lib.assertMsg stdenv.hostPlatform.isLinux "korgo-ssh-client is a Linux-only package";
+assert lib.assertMsg (
+  desktopSku == "bot-ssh-only" || isMini
+) "korgo-ssh-client desktopSku must be bot-ssh-only or bot-linux-mini";
 assert lib.assertMsg (isPinnedSha256 electronArchiveHash) ''
   korgo-ssh-client requires electronArchiveHash, the independently verified
   C11.1 SRI SHA256 for electron-v43.4.1-linux-x64.zip
@@ -81,15 +87,15 @@ let
       "apps/desktop"
       "apps/shared"
     ];
-    pname = "korgo-ssh-client-unpacked";
+    pname = "${packageName}-unpacked";
     version = electronVersion;
 
     nativeBuildInputs = [ unzip ];
 
     HERMES_DESKTOP_PRODUCT = "bot";
     VITE_HERMES_DESKTOP_PRODUCT = "bot";
-    HERMES_DESKTOP_SKU = "bot-ssh-only";
-    VITE_HERMES_DESKTOP_SKU = "bot-ssh-only";
+    HERMES_DESKTOP_SKU = desktopSku;
+    VITE_HERMES_DESKTOP_SKU = desktopSku;
 
     doCheck = true;
 
@@ -151,7 +157,12 @@ let
       test ! -e "$app/resources/orgo"
       test ! -e apps/desktop/dist/node_modules/node-pty
       test ! -e apps/desktop/dist/node_modules/get-windows
-      node apps/desktop/scripts/verify-ssh-only-bundle.mjs "$app"
+      ${
+        if isMini then
+          ''node apps/desktop/scripts/verify-ssh-only-bundle.mjs --mini "$app"''
+        else
+          ''node apps/desktop/scripts/verify-ssh-only-bundle.mjs "$app"''
+      }
       runHook postCheck
     '';
 
@@ -165,7 +176,7 @@ let
 
 in
 stdenv.mkDerivation {
-  pname = "korgo-ssh-client";
+  pname = packageName;
   version = electronVersion;
   dontUnpack = true;
 
@@ -217,7 +228,11 @@ stdenv.mkDerivation {
   };
 
   meta = with lib; {
-    description = "Contained, SSH-only Korgo Bot desktop client";
+    description =
+      if isMini then
+        "Contained Korgo Bot client for a dedicated Linux Mini workspace"
+      else
+        "Contained, SSH-only Korgo Bot desktop client";
     homepage = "https://github.com/nickvasilescu/hermes-bots";
     license = licenses.mit;
     platforms = [ "x86_64-linux" ];

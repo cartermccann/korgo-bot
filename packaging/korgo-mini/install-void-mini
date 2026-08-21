@@ -1,0 +1,367 @@
+#!/usr/bin/env bash
+# Root-owned installer/runbook for the isolated Void Mini runtime.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTALL_ROOT=/usr/local/libexec/korgo-mini
+BIN_ROOT=/usr/local/bin
+SBIN_ROOT=/usr/local/sbin
+CONFIG_PATH=/etc/korgo-mini.conf
+RUNIT_ROOT=/etc/sv
+ACTIVE_ROOT=/var/service
+REQUIRED_PACKAGES=(bubblewrap tigervnc openbox xauth dbus-x11 iproute2 util-linux runit git)
+
+runtime_user=cjm
+stage_root=/home/cjm/.hermes-korgo-stage
+install_packages=false
+
+die() {
+  printf 'install-void-mini: %s\n' "$*" >&2
+  exit 1
+}
+
+note() {
+  printf 'install-void-mini: %s\n' "$*" >&2
+}
+
+usage() {
+  cat <<'EOF'
+Usage:
+  install-void-mini check [--runtime-user USER] [--stage-root PATH]
+  install-void-mini install [--runtime-user USER] [--stage-root PATH] [--install-packages]
+  install-void-mini enable
+  install-void-mini status
+  install-void-mini start
+  install-void-mini stop
+  install-void-mini ensure
+  install-void-mini rollback
+
+`install` writes root-owned wrappers/config/runit definitions and a fresh tenant
+HOME/HERMES_HOME below STAGE_ROOT. It does not enable or start anything.
+`enable` links both services into runit but leaves their `down` files in place.
+`ensure` starts both services after all preflights pass.
+
+Rollback stops and disables only these two services. It never deletes tenant
+state, the pinned source/venv, migration evidence, regular ~/.hermes, WebCTX,
+Docker, SSH, or Tailscale state.
+EOF
+}
+
+require_root() {
+  [[ "$(id -u)" == 0 ]] || die "$1 requires root"
+}
+
+parse_options() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --runtime-user)
+        [[ $# -ge 2 ]] || die '--runtime-user needs a value'
+        runtime_user="$2"
+        shift 2
+        ;;
+      --stage-root)
+        [[ $# -ge 2 ]] || die '--stage-root needs a value'
+        stage_root="$2"
+        shift 2
+        ;;
+      --install-packages)
+        install_packages=true
+        shift
+        ;;
+      *) die "unknown option: $1" ;;
+    esac
+  done
+}
+
+validate_inputs() {
+  [[ "$runtime_user" =~ ^[a-z_][a-z0-9_-]*$ ]] || die 'unsafe runtime user'
+  id "$runtime_user" >/dev/null 2>&1 || die "runtime user does not exist: $runtime_user"
+  [[ "$stage_root" =~ ^/[A-Za-z0-9._/+:-]+$ ]] || die 'unsafe stage root'
+  [[ "$stage_root" != / && "$stage_root" != /home && "$stage_root" != /var ]] || die 'stage root is too broad'
+  [[ "$stage_root" != *'/../'* && "$stage_root" != *'/./'* && "$stage_root" != *'//' ]] ||
+    die 'stage root is not normalized'
+  [[ -d "$stage_root" && ! -L "$stage_root" ]] || die "stage root is missing or unsafe: $stage_root"
+
+  local host_home
+  host_home="$(getent passwd "$runtime_user" | cut -d: -f6)"
+  [[ "$stage_root" != "$host_home" && "$stage_root" != "$host_home/.hermes" ]] ||
+    die 'stage root must not reuse the host home or regular HERMES_HOME'
+}
+
+missing_commands() {
+  local command_name
+  for command_name in bwrap Xvnc openbox xauth dbus-run-session mcookie ss sv chpst git; do
+    command -v "$command_name" >/dev/null 2>&1 || printf '%s\n' "$command_name"
+  done
+}
+
+check_packages() {
+  local missing
+  missing="$(missing_commands)"
+  if [[ -n "$missing" ]]; then
+    printf 'Missing required commands:\n%s\n' "$missing" >&2
+    printf 'Void packages: %s\n' "${REQUIRED_PACKAGES[*]}" >&2
+    return 1
+  fi
+}
+
+check_stage_pin() {
+  local commit version schema
+  [[ -d "$stage_root/hermes-agent/.git" ]] || die 'stage Hermes checkout is missing'
+  [[ -x "$stage_root/venvs/hermes/bin/python" && -f "$stage_root/venvs/hermes/bin/hermes" ]] ||
+    die 'stage Hermes virtualenv is missing'
+  commit="$(git -C "$stage_root/hermes-agent" rev-parse --verify 'HEAD^{commit}')"
+  version="$(sed -n 's/^__version__ = "\([^"]*\)"/\1/p' "$stage_root/hermes-agent/hermes_cli/__init__.py" | head -1)"
+  schema="$(sed -n 's/^SCHEMA_VERSION = \([0-9][0-9]*\)$/\1/p' "$stage_root/hermes-agent/hermes_state_common.py" | head -1)"
+  [[ "$commit" == c820a5d38321a8d870e5b1ed0d89f8b933dd48e8 ]] || die 'stage commit mismatch'
+  [[ "$version" == 0.20.4 ]] || die 'stage version mismatch'
+  [[ "$schema" == 26 ]] || die 'stage schema mismatch'
+  git -C "$stage_root/hermes-agent" diff --quiet --no-ext-diff -- || die 'stage checkout has unstaged tracked changes'
+  git -C "$stage_root/hermes-agent" diff --cached --quiet --no-ext-diff -- || die 'stage checkout has staged changes'
+}
+
+cmdline_is_direct_conflict() {
+  local cmdline="$1" venv="$stage_root/venvs/hermes"
+  local arg next after_next index
+  local venv_python=false
+  local -a argv=()
+
+  mapfile -d '' -t argv <"$cmdline" 2>/dev/null || return 1
+  [[ ${#argv[@]} -gt 0 ]] || return 1
+  case "${argv[0]}" in
+    "$venv/bin/python"|"$venv/bin/python"[0-9.]*) venv_python=true ;;
+  esac
+
+  for ((index = 0; index < ${#argv[@]}; index++)); do
+    arg="${argv[index]}"
+    next="${argv[index + 1]:-}"
+    after_next="${argv[index + 2]:-}"
+    if [[ "$arg" == "$stage_root/"* && "${arg##*/}" == hermes ]]; then
+      [[ "$next" == serve || ( "$next" == gateway && "$after_next" == run ) ]] && return 0
+    fi
+    if [[ "$venv_python" == true ]]; then
+      [[ "$arg" == serve || ( "$arg" == gateway && "$next" == run ) ]] && return 0
+    fi
+  done
+
+  return 1
+}
+
+direct_conflicts() {
+  local proc pid
+  for proc in /proc/[0-9]*/cmdline; do
+    [[ -r "$proc" ]] || continue
+    pid="${proc#/proc/}"
+    pid="${pid%/cmdline}"
+    if cmdline_is_direct_conflict "$proc"; then
+      printf '%s\n' "$pid"
+    fi
+  done
+}
+
+check_no_conflict() {
+  local conflicts
+  conflicts="$(direct_conflicts)"
+  [[ -z "$conflicts" ]] ||
+    die "conflicting unsandboxed staged Hermes process(es): ${conflicts//$'\n'/,}; stop through the current owner first"
+}
+
+validate_install_targets() {
+  local marker="$INSTALL_ROOT/.korgo-mini-install-v1"
+  local target
+
+  if [[ -d "$INSTALL_ROOT" && ! -L "$INSTALL_ROOT" && -f "$marker" && ! -L "$marker" ]] &&
+    [[ "$(stat -c %u -- "$marker")" == 0 && "$(stat -c %a -- "$marker")" == 444 ]]; then
+    return 0
+  fi
+
+  for target in \
+    "$CONFIG_PATH" \
+    "$INSTALL_ROOT" \
+    "$BIN_ROOT/hermes-korgo" \
+    "$BIN_ROOT/korgo-workspace" \
+    "$SBIN_ROOT/install-korgo-mini" \
+    "$RUNIT_ROOT/hermes-korgo" \
+    "$RUNIT_ROOT/korgo-workspace"; do
+    [[ ! -e "$target" && ! -L "$target" ]] ||
+      die "refusing pre-existing unowned install target: $target"
+  done
+}
+
+write_config() {
+  local temporary
+  temporary="$(mktemp "${CONFIG_PATH}.XXXXXX")"
+  trap 'rm -f -- "$temporary"' RETURN
+  {
+    printf "KORGO_STAGE_ROOT='%s'\n" "$stage_root"
+    printf "KORGO_RUNTIME_USER='%s'\n" "$runtime_user"
+    printf "KORGO_VNC_PORT='5901'\n"
+  } >"$temporary"
+  chown root:root "$temporary"
+  chmod 0644 "$temporary"
+  mv -f -- "$temporary" "$CONFIG_PATH"
+  trap - RETURN
+}
+
+install_tenant_layout() {
+  local uid gid tenant="$stage_root/tenant" marker_valid=false
+  uid="$(id -u "$runtime_user")"
+  gid="$(id -g "$runtime_user")"
+
+  if [[ -f "$tenant/.korgo-mini-tenant-v1" && ! -L "$tenant/.korgo-mini-tenant-v1" ]] &&
+    [[ "$(stat -c %u -- "$tenant/.korgo-mini-tenant-v1")" == 0 ]] &&
+    [[ "$(stat -c %a -- "$tenant/.korgo-mini-tenant-v1")" == 444 ]]; then
+    marker_valid=true
+  fi
+  if [[ -e "$tenant" && "$marker_valid" != true ]]; then
+    if find "$tenant" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
+      die "refusing non-empty unmarked tenant directory: $tenant"
+    fi
+  fi
+  install -d -o "$uid" -g "$gid" -m 0700 \
+    "$tenant" "$tenant/home" "$tenant/hermes" "$tenant/workspace" \
+    "$tenant/runtime" "$tenant/logs"
+  install -d -o "$uid" -g "$gid" -m 0700 "$tenant/home/.hermes"
+  install -d -o "$uid" -g "$gid" -m 1777 "$tenant/runtime/X11-unix"
+  install -o root -g root -m 0444 /dev/null "$tenant/.korgo-mini-tenant-v1"
+}
+
+install_assets() {
+  install -d -o root -g root -m 0755 "$INSTALL_ROOT" "$BIN_ROOT" "$SBIN_ROOT"
+  install -o root -g root -m 0644 "$SCRIPT_DIR/korgo-mini-common" "$INSTALL_ROOT/korgo-mini-common"
+  install -o root -g root -m 0755 "$SCRIPT_DIR/korgo-workspace-session" "$INSTALL_ROOT/korgo-workspace-session"
+  install -o root -g root -m 0755 "$SCRIPT_DIR/hermes-korgo" "$BIN_ROOT/hermes-korgo"
+  install -o root -g root -m 0755 "$SCRIPT_DIR/korgo-workspace" "$BIN_ROOT/korgo-workspace"
+  install -o root -g root -m 0755 "$SCRIPT_DIR/install-void-mini" "$SBIN_ROOT/install-korgo-mini"
+  install -o root -g root -m 0444 /dev/null "$INSTALL_ROOT/.korgo-mini-install-v1"
+}
+
+write_service() {
+  local name="$1" foreground="$2" dir="$RUNIT_ROOT/$name"
+  install -d -o root -g root -m 0755 "$dir"
+  cat >"$dir/run" <<EOF
+#!/bin/sh
+exec 2>&1
+exec chpst -u ${runtime_user}:$(id -gn "$runtime_user") /usr/local/bin/${name} ${foreground}
+EOF
+  chown root:root "$dir/run"
+  chmod 0755 "$dir/run"
+  install -o root -g root -m 0644 /dev/null "$dir/down"
+}
+
+install_all() {
+  require_root install
+  validate_inputs
+  validate_install_targets
+  check_no_conflict
+  check_stage_pin
+  if [[ "$install_packages" == true ]]; then
+    xbps-install -Sy "${REQUIRED_PACKAGES[@]}"
+  fi
+  check_packages || die 'install required packages explicitly or rerun with --install-packages'
+  install_tenant_layout
+  write_config
+  install_assets
+  write_service hermes-korgo gateway-foreground
+  write_service korgo-workspace workspace-foreground
+  note 'installed without enabling or starting services'
+  note 'next: install-korgo-mini enable; then install-korgo-mini ensure'
+}
+
+enable_services() {
+  require_root enable
+  [[ -f "$CONFIG_PATH" ]] || die 'install first'
+  for service in hermes-korgo korgo-workspace; do
+    [[ -d "$RUNIT_ROOT/$service" ]] || die "missing service: $service"
+    if [[ -e "$ACTIVE_ROOT/$service" && ! -L "$ACTIVE_ROOT/$service" ]]; then
+      die "refusing non-symlink active service path: $ACTIVE_ROOT/$service"
+    fi
+    if [[ -L "$ACTIVE_ROOT/$service" && "$(readlink -- "$ACTIVE_ROOT/$service")" != "$RUNIT_ROOT/$service" ]]; then
+      die "refusing foreign service symlink: $ACTIVE_ROOT/$service"
+    fi
+    ln -sfn "$RUNIT_ROOT/$service" "$ACTIVE_ROOT/$service"
+  done
+  note 'services enabled but held down; run install-korgo-mini ensure explicitly'
+}
+
+installed_control() {
+  local action="$1"
+  [[ -x "$BIN_ROOT/hermes-korgo" && -x "$BIN_ROOT/korgo-workspace" ]] || die 'install first'
+  case "$action" in
+    status)
+      "$BIN_ROOT/hermes-korgo" status || true
+      "$BIN_ROOT/korgo-workspace" status || true
+      ;;
+    start)
+      require_root start
+      "$BIN_ROOT/hermes-korgo" start
+      "$BIN_ROOT/korgo-workspace" start
+      ;;
+    ensure)
+      require_root ensure
+      "$BIN_ROOT/hermes-korgo" ensure
+      "$BIN_ROOT/korgo-workspace" ensure
+      ;;
+    stop)
+      require_root stop
+      "$BIN_ROOT/korgo-workspace" stop || true
+      "$BIN_ROOT/hermes-korgo" stop || true
+      ;;
+  esac
+}
+
+rollback() {
+  local service
+  require_root rollback
+  for service in korgo-workspace hermes-korgo; do
+    if [[ -L "$ACTIVE_ROOT/$service" && "$(readlink -- "$ACTIVE_ROOT/$service")" != "$RUNIT_ROOT/$service" ]]; then
+      die "refusing foreign service symlink during rollback: $ACTIVE_ROOT/$service"
+    fi
+    [[ ! -e "$ACTIVE_ROOT/$service" || -L "$ACTIVE_ROOT/$service" ]] ||
+      die "refusing non-symlink active service path during rollback: $ACTIVE_ROOT/$service"
+  done
+  installed_control stop
+  for service in korgo-workspace hermes-korgo; do
+    if [[ -L "$ACTIVE_ROOT/$service" ]]; then
+      rm -f -- "$ACTIVE_ROOT/$service"
+    fi
+  done
+  note "rollback complete; tenant state preserved under $stage_root/tenant"
+  note 'regular Hermes, WebCTX, Docker, SSH, Tailscale, source, and migration evidence were not touched'
+}
+
+command_name="${1:-}"
+case "$command_name" in
+  -h|--help|help|'') usage; exit 0 ;;
+esac
+shift
+
+case "$command_name" in
+  check)
+    parse_options "$@"
+    validate_inputs
+    validate_install_targets
+    check_no_conflict
+    check_stage_pin
+    check_packages
+    note 'preflight passed'
+    ;;
+  install)
+    parse_options "$@"
+    install_all
+    ;;
+  enable)
+    [[ $# -eq 0 ]] || die 'enable takes no options'
+    enable_services
+    ;;
+  status|start|stop|ensure)
+    [[ $# -eq 0 ]] || die "$command_name takes no options"
+    installed_control "$command_name"
+    ;;
+  rollback)
+    [[ $# -eq 0 ]] || die 'rollback takes no options'
+    rollback
+    ;;
+  *) die "unknown command: $command_name" ;;
+esac

@@ -8,7 +8,8 @@ const openComputerSettings = vi.hoisted(() => vi.fn())
 
 vi.mock('@/lib/product', () => ({ isBotProduct: () => true }))
 vi.mock('@/lib/product-capabilities', () => ({
-  allowsDesktopCapability: (capability: string) => capability !== 'allowOrgo' || policy.orgoAllowed
+  allowsDesktopCapability: (capability: string) =>
+    capability === 'allowComputerSurface' ? policy.orgoAllowed : true
 }))
 vi.mock('@/lib/haptics', () => ({ triggerHaptic: vi.fn() }))
 vi.mock('@/components/ui/tooltip', () => ({

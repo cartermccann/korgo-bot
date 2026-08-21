@@ -173,6 +173,8 @@ import {
 import { registerLinkTitleIntegration } from './link-title-integration'
 import { ensureMainWindow } from './main-window-lifecycle'
 import { mayGrantMediaPermission } from './media-permission-policy'
+import { registerMiniDesktopProxy } from './mini-desktop-proxy'
+import { MINI_REMOTE_HERMES_PATH, parseMiniRuntimeContract } from './mini-runtime-contract'
 import {
   oauthGuardMayHardFail,
   oauthSessionIsLive,
@@ -229,6 +231,7 @@ import {
   desktopAppId,
   desktopAppName,
   isBotProduct,
+  isLinuxMiniProduct,
   isSshOnlyProduct
 } from './product'
 import { assertDesktopConnectionMode } from './product-capabilities'
@@ -339,8 +342,12 @@ const IS_WSL = isWslEnvironment()
 // build SDK, so gate Tahoe workarounds on Darwin instead.
 const DARWIN_MAJOR = IS_MAC ? Number.parseInt(os.release(), 10) || 0 : 0
 const APP_ROOT = app.getAppPath()
+// Replaced with a literal by bundle-electron-main.mjs. Keeping this as a
+// declared build constant (rather than a runtime const) lets esbuild remove
+// the full-product branches and their imports from both strict SSH SKUs.
+declare const STRICT_SSH_SKU: boolean
 
-if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') {
+if (STRICT_SSH_SKU) {
   registerKorgoRendererScheme(protocol)
 }
 
@@ -367,7 +374,29 @@ const ipcMain = createAuthorizedIpc({
 const gatewayProxy = registerGatewayProxy({
   ipc: ipcMain,
   resolveUrl: profile => freshGatewayWsUrl(profile),
-  sshOnly: isSshOnlyProduct()
+  sshOnly: isSshOnlyProduct(),
+  linuxMini: process.env.HERMES_DESKTOP_SKU === 'bot-linux-mini'
+})
+
+function strictSshNormalizationOptions() {
+  return {
+    identityPath: SSH_ONLY_IDENTITY_PATH,
+    ...(isLinuxMiniProduct() ? { remoteHermesPath: MINI_REMOTE_HERMES_PATH } : {})
+  }
+}
+
+const miniDesktopProxy = registerMiniDesktopProxy({
+  ipc: ipcMain,
+  pickLocalPort: async () => Number(await pickLocalPort()),
+  resolveSsh: async () => {
+    const state = sshConnections.get('')
+
+    if (!state?.ssh) {
+      throw new Error('Connect Korgo to the Mini before opening its computer.')
+    }
+
+    return state.ssh
+  }
 })
 
 // Preload must be plain JS — Electron's sandbox can't run .ts, and tsx's
@@ -400,7 +429,7 @@ if (REMOTE_DISPLAY_REASON) {
 // the CDP tooling in scripts/ can attach; never for a packaged build — see
 // electron/dev-cdp.ts. Must run before app `ready` like the switches above;
 // Chromium binds it at launch.
-if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+if (!STRICT_SSH_SKU) {
   const devCdp = resolveDevCdpPort({ env: process.env, isPackaged: IS_PACKAGED, devServer: DEV_SERVER })
 
   if (devCdp.port) {
@@ -449,7 +478,7 @@ if (PASSWORD_STORE.store) {
 
 windowsSandboxIntegration?.initialize(app, execFileSync)
 
-if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+if (!STRICT_SSH_SKU) {
   registerSkuIntegrations?.(() => {
     ipcMain.handle('hermes:get-remote-display-reason', () => REMOTE_DISPLAY_REASON)
   })
@@ -492,7 +521,7 @@ const SOURCE_REPO_ROOT = path.resolve(APP_ROOT, '../..')
 const INSTALL_STAMP_SCHEMA_VERSION = 1
 
 function loadInstallStamp() {
-  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') {
+  if (STRICT_SSH_SKU) {
     return null
   }
 
@@ -538,9 +567,9 @@ function loadInstallStamp() {
   return null
 }
 
-const INSTALL_STAMP = process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only' ? null : loadInstallStamp()
+const INSTALL_STAMP = STRICT_SSH_SKU ? null : loadInstallStamp()
 
-if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+if (!STRICT_SSH_SKU) {
   if (INSTALL_STAMP) {
     console.log(
       `[hermes] install stamp: ${INSTALL_STAMP.commit.slice(0, 12)}${INSTALL_STAMP.branch ? ` (${INSTALL_STAMP.branch})` : ''}${INSTALL_STAMP.dirty ? ' [DIRTY]' : ''} from ${INSTALL_STAMP.source || 'unknown'}`
@@ -638,8 +667,7 @@ const BOOTSTRAP_MARKER_SCHEMA_VERSION = 1
 
 const DESKTOP_CONNECTION_CONFIG_PATH = path.join(app.getPath('userData'), 'connection.json')
 
-const DESKTOP_ORGO_CONFIG_PATH =
-  process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only' ? '' : path.join(app.getPath('userData'), 'orgo-desktop.json')
+const DESKTOP_ORGO_CONFIG_PATH = STRICT_SSH_SKU ? '' : path.join(app.getPath('userData'), 'orgo-desktop.json')
 
 const DESKTOP_INSTALLATION_PATH = path.join(app.getPath('userData'), 'desktop-installation.json')
 const DESKTOP_UPDATE_CONFIG_PATH = path.join(app.getPath('userData'), 'updates.json')
@@ -1049,7 +1077,7 @@ const STREAMABLE_MEDIA_EXTS = new Set([
   '.webm'
 ])
 
-if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+if (!STRICT_SSH_SKU) {
   protocol.registerSchemesAsPrivileged([
     {
       scheme: MEDIA_PROTOCOL,
@@ -1558,7 +1586,7 @@ let bootstrapState = {
 let firstRunSetupGate = null
 
 function broadcastBootstrapEvent(ev) {
-  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') {
+  if (STRICT_SSH_SKU) {
     return
   }
 
@@ -2009,7 +2037,7 @@ function backendSupportsServe(backend) {
           ...process.env,
           HERMES_HOME,
           ...(backend.env || {}),
-          ...(process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only' ? {} : orgoBackendEnv())
+          ...(STRICT_SSH_SKU ? {} : orgoBackendEnv())
         },
         timeout: PROBE_TIMEOUT_MS,
         stdio: 'ignore',
@@ -3773,7 +3801,7 @@ function createActiveBackend(backendArgs) {
 }
 
 function resolveHermesBackend(backendArgs) {
-  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') {
+  if (STRICT_SSH_SKU) {
     throw new Error('The SSH-only product has no local runtime resolver.')
   }
 
@@ -3954,7 +3982,7 @@ function resolveHermesBackend(backendArgs) {
 }
 
 async function ensureRuntime(backend) {
-  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') {
+  if (STRICT_SSH_SKU) {
     throw new Error('The SSH-only product has no local bootstrap runner.')
   }
 
@@ -5457,10 +5485,10 @@ function installMediaPermissions() {
 //     "is the user signed in at all?" gate / display signal.
 // ---------------------------------------------------------------------------
 
-const OAUTH_SESSION_PARTITION = process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only' ? '' : 'persist:hermes-remote-oauth'
+const OAUTH_SESSION_PARTITION = STRICT_SSH_SKU ? '' : 'persist:hermes-remote-oauth'
 
 function getOauthSession() {
-  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') {
+  if (STRICT_SSH_SKU) {
     return null
   }
 
@@ -5913,7 +5941,7 @@ function fetchJsonViaOauthSession(url, options: any = {}) {
 const _nativeTokens = new Map<string, NativeTokenSet>()
 
 function _nativeTokenStorePath() {
-  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') {
+  if (STRICT_SSH_SKU) {
     return ''
   }
 
@@ -6040,7 +6068,7 @@ function _nativeTokenStoreIo(): NativeTokenStoreIo {
 }
 
 function _persistNativeTokens(baseUrl: string, tokens: NativeTokenSet | null) {
-  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') {
+  if (STRICT_SSH_SKU) {
     return
   }
 
@@ -6048,7 +6076,7 @@ function _persistNativeTokens(baseUrl: string, tokens: NativeTokenSet | null) {
 }
 
 function _loadNativeTokens(baseUrl: string): NativeTokenSet | null {
-  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') {
+  if (STRICT_SSH_SKU) {
     return null
   }
 
@@ -6099,7 +6127,7 @@ function postJsonNoAuth(url: string, body: unknown, opts: any = {}) {
 // /auth/native/refresh if the stored one is at/near expiry. Returns null when
 // there are no tokens or the refresh is terminally rejected (caller re-logins).
 async function ensureNativeAccessToken(baseUrl: string): Promise<string | null> {
-  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') {
+  if (STRICT_SSH_SKU) {
     return null
   }
 
@@ -7393,7 +7421,7 @@ function buildSshBlock(input: any, existingBlock: any = {}) {
   }
 
   const merged = isSshOnlyProduct()
-    ? normalizeSshOnlyConfig(raw, { identityPath: SSH_ONLY_IDENTITY_PATH })
+    ? normalizeSshOnlyConfig(raw, strictSshNormalizationOptions())
     : normalizeSshConfig(raw)
 
   if (!merged) {
@@ -7705,10 +7733,16 @@ async function bootstrapSshConnectionInner(profile, sshConfig, reuseToken, sourc
   try {
     const platform = await detectRemotePlatform(ssh, sshConfig.remoteHermesPath || '')
     const lifecycle = platform.os === 'Windows' ? connectWindowsRemote : remoteLifecycle.connect
+
+    const miniRuntimeContract = isLinuxMiniProduct()
+      ? parseMiniRuntimeContract(await ssh.exec(`${MINI_REMOTE_HERMES_PATH} desktop-contract`, { timeoutMs: 10_000 }))
+      : null
+
     result = await lifecycle({
       ssh,
       profile: sshConfig.remoteProfile || connectionScopeKey(profile) || '',
       remoteHermesPath: sshConfig.remoteHermesPath || '',
+      ...(miniRuntimeContract || {}),
       ownershipId: sshOwnershipKey(profile),
       reuseToken: reuseToken || '',
       forward: (localPort, remotePort) => ssh.forward(localPort, remotePort),
@@ -7819,10 +7853,7 @@ async function resolveRemoteBackend(profile) {
       return null
     }
 
-    const ssh = normalizeSshOnlyConfig(
-      { mode: 'ssh', ...(config.remote || {}) },
-      { identityPath: SSH_ONLY_IDENTITY_PATH }
-    )
+    const ssh = normalizeSshOnlyConfig({ mode: 'ssh', ...(config.remote || {}) }, strictSshNormalizationOptions())
 
     const reuseToken = decryptDesktopSecret(config.remote?.token)
 
@@ -8047,7 +8078,7 @@ async function testDesktopConnectionConfig(input: any = {}) {
     }
 
     const sshConfig = isSshOnlyProduct()
-      ? normalizeSshOnlyConfig(rawSshConfig, { identityPath: SSH_ONLY_IDENTITY_PATH })
+      ? normalizeSshOnlyConfig(rawSshConfig, strictSshNormalizationOptions())
       : normalizeSshConfig(rawSshConfig)
 
     if (!sshConfig) {
@@ -8457,7 +8488,7 @@ async function spawnPoolBackend(profile, entry) {
     }
   }
 
-  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') {
+  if (STRICT_SSH_SKU) {
     throw new Error('The SSH-only product cannot start a local profile backend.')
   }
 
@@ -8505,7 +8536,7 @@ async function spawnPoolBackend(profile, entry) {
         ...process.env,
         HERMES_HOME,
         ...backend.env,
-        ...(process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only' ? {} : orgoBackendEnv()),
+        ...(STRICT_SSH_SKU ? {} : orgoBackendEnv()),
         // Pin the gateway's tool/terminal cwd to the same directory we chose for
         // the child process. Inherited TERMINAL_CWD (or a stale config bridge)
         // can still point at the install dir even when spawn cwd is home.
@@ -8744,32 +8775,30 @@ async function startHermes() {
 
     const setup = await runPrimaryBackendStartup({
       connectRemote,
-      ensureLocalRuntime:
-        process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only'
-          ? async () => {
-              throw new Error('The SSH-only product cannot install or start a local runtime.')
+      ensureLocalRuntime: STRICT_SSH_SKU
+        ? async () => {
+            throw new Error('The SSH-only product cannot install or start a local runtime.')
+          }
+        : ensureRuntime,
+      prepareLocalBackend: STRICT_SSH_SKU
+        ? async () => {
+            throw new Error('The SSH-only product cannot prepare a local runtime.')
+          }
+        : async () => {
+            // Local tokens, arguments, PATH/venv probes, and runtime resolution are
+            // created only after the policy permits the local branch.
+            token = crypto.randomBytes(32).toString('base64url')
+            backendArgs = ['serve', '--host', '127.0.0.1', '--port', '0']
+            const activeProfile = readActiveDesktopProfile()
+
+            if (activeProfile) {
+              backendArgs.unshift('--profile', activeProfile)
             }
-          : ensureRuntime,
-      prepareLocalBackend:
-        process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only'
-          ? async () => {
-              throw new Error('The SSH-only product cannot prepare a local runtime.')
-            }
-          : async () => {
-              // Local tokens, arguments, PATH/venv probes, and runtime resolution are
-              // created only after the policy permits the local branch.
-              token = crypto.randomBytes(32).toString('base64url')
-              backendArgs = ['serve', '--host', '127.0.0.1', '--port', '0']
-              const activeProfile = readActiveDesktopProfile()
 
-              if (activeProfile) {
-                backendArgs.unshift('--profile', activeProfile)
-              }
+            await advanceBootProgress('backend.runtime', 'Resolving Hermes runtime', 28)
 
-              await advanceBootProgress('backend.runtime', 'Resolving Hermes runtime', 28)
-
-              return resolveHermesBackend(backendArgs)
-            },
+            return resolveHermesBackend(backendArgs)
+          },
       resolveRemote: () => {
         // Classify immediately before each throwing resolve. This callback runs
         // both for an already-saved remote and after first-run remote Apply.
@@ -8779,14 +8808,12 @@ async function startHermes() {
       },
       waitForDecision: waitForFirstRunSetupChoice,
       sshOnly: isSshOnlyProduct(),
-      onSshOnlyConfigurationRequired:
-        process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only'
-          ? undefined
-          : () => promptFirstRunSetupChoice({ kind: 'bootstrap-needed', platform: process.platform, activeRoot: '' }),
+      onSshOnlyConfigurationRequired: STRICT_SSH_SKU
+        ? undefined
+        : () => promptFirstRunSetupChoice({ kind: 'bootstrap-needed', platform: process.platform, activeRoot: '' }),
       // Mutual exclusion with an in-app update (#50238). Remote connections
       // return before this waiter; local starts park until the updater exits.
-      waitForLocalStart:
-        process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only' ? async () => undefined : waitForUpdateToFinish
+      waitForLocalStart: STRICT_SSH_SKU ? async () => undefined : waitForUpdateToFinish
     })
 
     if (setup.kind === 'remote') {
@@ -8820,7 +8847,7 @@ async function startHermes() {
           // can't reliably do that, so we set it inline for every spawn.
           HERMES_HOME,
           ...backend.env,
-          ...(process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only' ? {} : orgoBackendEnv()),
+          ...(STRICT_SSH_SKU ? {} : orgoBackendEnv()),
           TERMINAL_CWD: hermesCwd,
           HERMES_DASHBOARD_SESSION_TOKEN: token,
           // Marks this dashboard backend as desktop-spawned so it runs the cron
@@ -9030,6 +9057,7 @@ function registerApplicationWindow(win: BrowserWindow, capability: WindowCapabil
 
     unregisterTrust = () => {}
     gatewayProxy.disposeOwner(webContents)
+    miniDesktopProxy.disposeOwner(webContents)
   }
 
   const rotateTrust = (url: string) => {
@@ -9116,7 +9144,7 @@ function wireCommonWindowHandlers(win, { zoom = true }: { zoom?: boolean } = {})
     win.webContents.on('did-finish-load', () => restorePersistedZoomLevel(win))
   }
 
-  if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+  if (!STRICT_SSH_SKU) {
     installContextMenu(win)
   }
 
@@ -10407,7 +10435,7 @@ ipcMain.handle('hermes:backend:touch', async (_event, profile) => {
   return { ok: true }
 })
 
-if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+if (!STRICT_SSH_SKU) {
   ipcMain.handle('hermes:gateway:ws-url', async (_event, profile) => {
     return gatewayWsUrlIpcResult(() => freshGatewayWsUrl(profile))
   })
@@ -10461,7 +10489,7 @@ ipcMain.on('hermes:zoom:set-percent', (event, percent) => {
 // Keep the direct build-time SKU branch around host-tool callbacks. Esbuild
 // retains the body of `undefined?.(() => ...)`, which would leave privileged
 // handlers and their channel names in the SSH artifact even though unreachable.
-if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+if (!STRICT_SSH_SKU) {
   registerSkuIntegrations?.(() => {
     ipcMain.handle('hermes:pet-overlay:open', async (_event, request) => {
       const bounds = request && request.bounds ? request.bounds : request
@@ -10687,7 +10715,7 @@ ipcMain.handle('hermes:hud:close', async () => {
   return { ok: true }
 })
 
-if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+if (!STRICT_SSH_SKU) {
   registerSkuIntegrations?.(() => {
     ipcMain.handle('hermes:bootstrap:reset', async () => {
       // Renderer's "Reload and retry" path. Clear the latched failure and
@@ -10782,7 +10810,7 @@ if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
 
 ipcMain.handle('hermes:boot-progress:get', async () => bootProgressState)
 
-if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+if (!STRICT_SSH_SKU) {
   registerSkuIntegrations?.(() => {
     ipcMain.handle('hermes:bootstrap:get', async () => getBootstrapState())
     ipcMain.handle('hermes:orgo-desktop:config:get', async (_event, profile) => sanitizeOrgoDesktopConfig(profile))
@@ -10867,7 +10895,7 @@ ipcMain.handle('hermes:connection-config:get', async (_event, profile) =>
   sanitizeDesktopConnectionConfig(readDesktopConnectionConfig(), profile)
 )
 
-if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+if (!STRICT_SSH_SKU) {
   registerSkuIntegrations?.(() => {
     ipcMain.handle('hermes:ssh-config:hosts', async () => ({ hosts: collectSshConfigHosts() }))
     ipcMain.handle('hermes:ssh-config:resolve', async (_event, host) => {
@@ -10918,7 +10946,7 @@ if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
 
 ipcMain.handle('hermes:connection-config:test', async (_event, payload) => testDesktopConnectionConfig(payload))
 
-if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+if (!STRICT_SSH_SKU) {
   registerSkuIntegrations?.(() => {
     ipcMain.handle('hermes:connection-config:probe', async (_event, rawUrl) => probeRemoteAuthMode(rawUrl))
     ipcMain.handle('hermes:connection-config:oauth-login', async (_event, rawUrl) => {
@@ -11122,7 +11150,7 @@ ipcMain.handle('hermes:profile:set', async (_event, name) => {
   return { profile: next }
 })
 
-if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+if (!STRICT_SSH_SKU) {
   registerSkuIntegrations?.(() => {
     ipcMain.on('hermes:previewShortcutActive', (_event, active) => {
       previewShortcutActive = Boolean(active)
@@ -11142,7 +11170,7 @@ ipcMain.handle('hermes:requestMicrophoneAccess', async () => {
 // Metadata only (app, title, bounds) — never pixels. On macOS, other apps'
 // window titles are gated behind the Screen Recording permission; pass titles
 // through only when it is ALREADY granted, and never prompt for it here.
-if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+if (!STRICT_SSH_SKU) {
   registerSkuIntegrations?.(() => {
     ipcMain.handle('hermes:window:readBelow', async event => {
       const win = BrowserWindow.fromWebContents(event.sender)
@@ -11406,7 +11434,7 @@ async function mergeRemoteProfileSessions(searchParams, remoteProfiles) {
 
 ipcMain.handle('hermes:api', async (_event, request) => {
   if (isSshOnlyProduct()) {
-    assertSshOnlyApiRequestAllowed(request)
+    assertSshOnlyApiRequestAllowed(request, process.env.HERMES_DESKTOP_SKU === 'bot-linux-mini')
   }
 
   // Remote-profile session requests would otherwise hit the local primary off
@@ -11569,7 +11597,7 @@ function persistDataUrlReadMaxMb(maxMb) {
   return next
 }
 
-if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+if (!STRICT_SSH_SKU) {
   registerSkuIntegrations?.(() => {
     ipcMain.handle('hermes:data-url-read-max:get', () => ({
       maxMb: dataUrlReadMaxMb,
@@ -11921,7 +11949,7 @@ ipcMain.on('hermes:quick-entry:state', (_event, payload) => {
 
 ipcMain.on('hermes:quick-entry:dismiss', () => hideQuickEntryWindow())
 
-if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+if (!STRICT_SSH_SKU) {
   registerSkuIntegrations?.(() => {
     ipcMain.handle('hermes:openExternal', (_event, url) => {
       if (!openExternalUrl(url)) {
@@ -11986,7 +12014,7 @@ ipcMain.handle('hermes:stop-find-in-page', event => {
   stopFind(win.webContents)
 })
 
-if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+if (!STRICT_SSH_SKU) {
   registerSkuIntegrations?.(() => {
     ipcMain.handle('hermes:openPreviewInBrowser', async (_event, url) => {
       if (!(await openPreviewInBrowser(url))) {
@@ -12264,7 +12292,7 @@ function disposeTerminalSession(id) {
   return true
 }
 
-if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+if (!STRICT_SSH_SKU) {
   registerSkuIntegrations?.(() => {
     ipcMain.handle('hermes:fs:readDir', async (_event, dirPath) => readDirForIpc(dirPath))
 
@@ -12620,7 +12648,7 @@ if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
   })
 }
 
-if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+if (!STRICT_SSH_SKU) {
   registerSkuIntegrations?.(() => {
     ipcMain.handle('hermes:updates:check', async () =>
       !allowsGenericHermesUpdates()
@@ -12923,7 +12951,7 @@ async function runDesktopUninstall(mode) {
   return { ok: true, mode, willRemoveAppBundle: Boolean(removeBundle), scriptPath }
 }
 
-if (process.env.HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+if (!STRICT_SSH_SKU) {
   registerSkuIntegrations?.(() => {
     ipcMain.handle('hermes:uninstall:summary', async () => getUninstallSummary())
     ipcMain.handle('hermes:uninstall:run', async (_event, payload) => {
@@ -13093,7 +13121,7 @@ app.whenReady().then(() => {
 
   installMediaPermissions()
 
-  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') {
+  if (STRICT_SSH_SKU) {
     registerKorgoRendererProtocol(protocol, path.dirname(resolveRendererIndex()))
   } else {
     registerMediaProtocol()

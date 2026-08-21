@@ -655,6 +655,36 @@ test('connect() fresh spawn writes hermesHome + protocolVersion into the lockfil
   assert.match(lockWrite, /"hermesHome":"\/home\/alice\/\.hermes"/)
 })
 
+test('connect() can keep Mini ownership artifacts and runtime identity inside the staged tenant', async () => {
+  const remoteLockDir = '/home/cjm/.hermes-korgo-stage/tenant/home/.hermes/desktop-ssh'
+
+  const ssh = fakeSsh([
+    [/uname/, 'Linux\nx86_64'],
+    [/\[ -x/, 'OK'],
+    [/cat .*lock\.json/, ''],
+    [/grep -q ssh-session-token-file/, 'YES\n'],
+    [/python3 -c/, ''],
+    [/printf '%s\\n'/, ''],
+    [/setsid/, '702\n'],
+    [/kill -0 702/, 'ALIVE'],
+    [/cat .*\.log/, 'HERMES_DASHBOARD_READY port=45502\n']
+  ])
+
+  await connect(
+    connectDeps(ssh, {
+      adoptServedToken: async () => 'fresh',
+      remoteHermesHome: '/state/hermes',
+      remoteLockDir
+    })
+  )
+
+  const commands = ssh.calls.join('\n')
+  assert.match(commands, /hermes-korgo-stage\/tenant\/home\/\.hermes\/desktop-ssh/)
+  assert.doesNotMatch(commands, /"\$HOME"'\/\.hermes\/desktop-ssh/)
+  const lockWrite = ssh.calls.find(command => command.includes('schemaVersion')) || ''
+  assert.match(lockWrite, /"hermesHome":"\/state\/hermes"/)
+})
+
 test('connect() respawns when the lockfile pid is dead (killed dashboard)', async () => {
   const lock = ownedLock({ tokenFingerprint: fingerprintToken('t') })
 

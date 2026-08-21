@@ -12,6 +12,9 @@ const READ_ONLY_PATHS = new Set(['/api/model/info', '/api/profiles', '/api/profi
 const SESSION_PATH_RE = /^\/api\/sessions\/[^/]+$/
 const SESSION_MESSAGES_PATH_RE = /^\/api\/sessions\/[^/]+\/messages$/
 const SESSION_PATCH_KEYS = new Set(['archived', 'pinned', 'profile', 'title'])
+const MINI_CRON_PATH_RE = /^\/api\/cron\/jobs\/([A-Za-z0-9_-]{1,128})$/
+const MINI_CRON_RUNS_PATH_RE = /^\/api\/cron\/jobs\/([A-Za-z0-9_-]{1,128})\/runs$/
+const MINI_CRON_ACTION_PATH_RE = /^\/api\/cron\/jobs\/([A-Za-z0-9_-]{1,128})\/(pause|resume|trigger)$/
 
 function denied(): never {
   throw new Error('This API operation is unavailable in the SSH-only client.')
@@ -235,13 +238,73 @@ function validSessionPatchBody(value: unknown): boolean {
   return true
 }
 
+function plainBody(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function exactBodyKeys(body: Record<string, unknown>, allowed: readonly string[]): boolean {
+  const keys = Object.keys(body)
+
+  return keys.length > 0 && keys.every(key => allowed.includes(key))
+}
+
+function validCronFields(body: Record<string, unknown>): boolean {
+  return (
+    (!('name' in body) || (typeof body.name === 'string' && body.name.length > 0 && body.name.length <= 256)) &&
+    (!('prompt' in body) || (typeof body.prompt === 'string' && body.prompt.length > 0 && body.prompt.length <= 100_000)) &&
+    (!('schedule' in body) ||
+      (typeof body.schedule === 'string' && body.schedule.length > 0 && body.schedule.length <= 512)) &&
+    (!('enabled' in body) || typeof body.enabled === 'boolean')
+  )
+}
+
+function validMiniCronRequest(method: string, target: URL, body: unknown): boolean {
+  const path = target.pathname
+
+  if (method === 'GET' && path === '/api/cron/jobs' && !hasBody(body)) {
+    return exactQuery(target, ['profile']) && validProfile(target.searchParams.get('profile'), false, true)
+  }
+
+  if (method === 'GET' && MINI_CRON_PATH_RE.test(path) && !hasBody(body)) {
+    return exactQuery(target, [])
+  }
+
+  if (method === 'GET' && MINI_CRON_RUNS_PATH_RE.test(path) && !hasBody(body)) {
+    return exactQuery(target, ['limit']) && boundedInteger(target.searchParams.get('limit'), 1, 100, true)
+  }
+
+  if (method === 'POST' && path === '/api/cron/jobs' && plainBody(body)) {
+    return (
+      exactQuery(target, []) &&
+      exactBodyKeys(body, ['name', 'prompt', 'schedule']) &&
+      ['name', 'prompt', 'schedule'].every(key => key in body) &&
+      validCronFields(body)
+    )
+  }
+
+  if (method === 'PUT' && MINI_CRON_PATH_RE.test(path) && plainBody(body) && plainBody(body.updates)) {
+    return (
+      exactQuery(target, []) &&
+      exactBodyKeys(body, ['updates']) &&
+      exactBodyKeys(body.updates, ['enabled', 'name', 'prompt', 'schedule']) &&
+      validCronFields(body.updates)
+    )
+  }
+
+  if (method === 'POST' && MINI_CRON_ACTION_PATH_RE.test(path) && !hasBody(body)) {
+    return exactQuery(target, [])
+  }
+
+  return method === 'DELETE' && MINI_CRON_PATH_RE.test(path) && !hasBody(body) && exactQuery(target, [])
+}
+
 /**
  * The SSH-only desktop is a chat/session client, not a general credentialed
  * gateway console. Enforce that boundary before backend resolution so a
  * compromised renderer cannot reuse the generic REST bridge for Mini-owned
  * configuration, provider, MCP, browser, update, or maintenance operations.
  */
-export function assertSshOnlyApiRequestAllowed(request: DesktopApiRequest): void {
+export function assertSshOnlyApiRequestAllowed(request: DesktopApiRequest, linuxMini = false): void {
   if (
     !request ||
     typeof request !== 'object' ||
@@ -261,6 +324,10 @@ export function assertSshOnlyApiRequestAllowed(request: DesktopApiRequest): void
   const path = target.pathname
 
   if (method === 'GET' && !hasBody(request.body) && validReadOnlyTarget(target)) {
+    return
+  }
+
+  if (linuxMini && validMiniCronRequest(method, target, request.body)) {
     return
   }
 

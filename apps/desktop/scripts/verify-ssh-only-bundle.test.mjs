@@ -11,7 +11,10 @@ import {
   BANNED_RENDERER_HTML_MARKERS,
   BANNED_RENDERER_MARKERS,
   BANNED_RESOURCE_NAMES,
-  REQUIRED_IDENTITY_MARKERS
+  MINI_ALLOWED_RENDERER_MARKERS,
+  NON_MINI_BANNED_ARTIFACT_MARKERS,
+  REQUIRED_IDENTITY_MARKERS,
+  REQUIRED_MINI_IDENTITY_MARKERS
 } from './verify-ssh-only-bundle.mjs'
 
 const verifier = fileURLToPath(new URL('./verify-ssh-only-bundle.mjs', import.meta.url))
@@ -34,6 +37,34 @@ function fixture(contents = 'Korgo Bot bot-ssh-only clean packaged application')
 
 function runVerifier(root) {
   return spawnSync(process.execPath, [verifier, root], { encoding: 'utf8' })
+}
+
+function runMiniVerifier(root) {
+  return spawnSync(process.execPath, [verifier, '--mini', root], { encoding: 'utf8' })
+}
+
+function miniFixture() {
+  const root = fixture('Korgo Bot bot-linux-mini clean packaged application')
+  fs.writeFileSync(
+    path.join(root, 'resources', 'app.asar.unpacked', 'dist', 'assets', 'renderer.js'),
+    [
+      'Connect existing Hermes over SSH',
+      'Mini Tailscale IP',
+      'New session',
+      'hermes-bots:pane-v2',
+      'Bot Chat',
+      'hermes:mini-desktop:start',
+      'hermes:mini-desktop:send',
+      'hermes:mini-desktop:ack',
+      'hermes:mini-desktop:close',
+      '/usr/local/bin/korgo-workspace',
+      '/usr/local/bin/hermes-korgo',
+      'cron.manage',
+      ...MINI_ALLOWED_RENDERER_MARKERS
+    ].join('\n')
+  )
+
+  return root
 }
 
 test('executed verifier rejects every banned packaged content marker', () => {
@@ -180,5 +211,79 @@ test('executed verifier passes a clean complete packaged fixture', () => {
     assert.match(result.stdout, /PASS/)
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('Mini verifier permits only the explicitly restored Bot and routine markers', () => {
+  const root = miniFixture()
+  try {
+    const result = runMiniVerifier(root)
+    assert.equal(result.status, 0, result.stderr)
+    assert.match(result.stdout, /PASS/)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('ordinary SSH verifier still rejects a Mini Bot capability marker', () => {
+  const root = fixture()
+  try {
+    fs.appendFileSync(
+      path.join(root, 'resources', 'app.asar.unpacked', 'dist', 'assets', 'renderer.js'),
+      '\nprofiles.create'
+    )
+    const result = runVerifier(root)
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /banned SSH renderer marker/)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('ordinary SSH verifier rejects every Mini-only main and preload marker', () => {
+  for (const marker of NON_MINI_BANNED_ARTIFACT_MARKERS) {
+    const root = fixture(`Korgo Bot bot-ssh-only\n${marker}`)
+    try {
+      const result = runVerifier(root)
+      assert.notEqual(result.status, 0, marker)
+      assert.match(result.stderr, /banned packaged marker/, marker)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  }
+})
+
+test('Mini verifier still rejects host tools, credential entry, and broad gateway methods', () => {
+  for (const marker of ['hermes:terminal:', 'Orgo API key', 'cli.exec', 'image.generate', 'pet.gallery']) {
+    const root = miniFixture()
+    try {
+      fs.appendFileSync(
+        path.join(root, 'resources', 'app.asar.unpacked', 'dist', 'assets', 'renderer.js'),
+        `\n${marker}`
+      )
+      const result = runMiniVerifier(root)
+      assert.notEqual(result.status, 0, marker)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  }
+})
+
+test('Mini verifier fails closed when any required Mini identity marker is missing', () => {
+  for (const marker of REQUIRED_MINI_IDENTITY_MARKERS) {
+    const root = miniFixture()
+    try {
+      for (const file of [
+        path.join(root, 'resources', 'app.asar'),
+        path.join(root, 'resources', 'app.asar.unpacked', 'dist', 'assets', 'renderer.js')
+      ]) {
+        fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replaceAll(marker, 'removed-mini-marker'))
+      }
+      const result = runMiniVerifier(root)
+      assert.notEqual(result.status, 0, marker)
+      assert.match(result.stderr, /missing required packaged identity marker/)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
   }
 })

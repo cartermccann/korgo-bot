@@ -60,6 +60,7 @@
 import { existsSync, rmSync, renameSync } from 'node:fs'
 import path from 'node:path'
 import { Arch } from 'electron-builder'
+import { validateDesktopBuildEnvironment } from './desktop-sku.mjs'
 import { removeStagedHostNativeDeps, stageNodePty, stageGetWindows } from './stage-native-deps.mjs'
 
 export function cleanStaleAppOutDir(appOutDir) {
@@ -111,6 +112,7 @@ export function preserveRollbackBackup(appOutDir, productExeName = 'Hermes.exe')
 }
 
 export default async function beforePack(context) {
+  const selectedSku = validateDesktopBuildEnvironment()
   const appOutDir = context && context.appOutDir
   const platformName = context && context.electronPlatformName
   try {
@@ -133,7 +135,10 @@ export default async function beforePack(context) {
   try {
     const platform = context && context.electronPlatformName
     const archName = context && typeof context.arch === 'number' ? Arch[context.arch] : undefined
-    if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') {
+    if (
+      selectedSku === 'bot-linux-mini' ||
+      selectedSku === 'bot-ssh-only'
+    ) {
       const removed = removeStagedHostNativeDeps()
       console.log(`[before-pack] SSH-only SKU excludes host native dependencies (${removed.join(', ') || 'clean'})`)
     } else if (platform && archName) {

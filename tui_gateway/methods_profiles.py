@@ -134,7 +134,10 @@ def _(rid, params: dict) -> dict:
     ``model`` + ``provider`` (optional model pin, best-effort), and
     ``mirror_credentials`` (default true) — copy the launch profile's
     ``.env`` and ``auth.json`` into the new profile, and inherit its
-    model.provider/model.default when no explicit pin is given.
+    model/provider/voice configuration when no explicit pin is given.
+    ``inherit: none`` is the fail-closed client contract: it disables every
+    one of those launch-profile inheritance paths, even though the legacy
+    ``mirror_credentials`` default remains true for existing callers.
 
     Credential mirroring exists because ``create_profile()`` deliberately
     seeds a comment-only ``.env`` and never copies ``auth.json`` (OAuth
@@ -143,8 +146,7 @@ def _(rid, params: dict) -> dict:
     with "No inference provider configured" and there is no interactive
     ``hermes setup`` in that flow to recover. A profile spawned as an
     always-available teammate must be able to think out of the box; callers
-    that want an isolated/credential-free profile pass
-    ``mirror_credentials: false``.
+    that want an isolated/credential-free profile pass ``inherit: none``.
     """
 
     def _has_real_env_content(env_path) -> bool:
@@ -173,6 +175,7 @@ def _(rid, params: dict) -> dict:
             clone_config=bool(clone_from) and not clone_all,
             no_skills=is_truthy_value(params.get("no_skills", False)),
             description=str(params.get("description") or "").strip() or None,
+            clone_credentials=params.get("inherit") != "none",
         )
     except (ValueError, FileExistsError, FileNotFoundError) as e:
         return _err(rid, 4062, str(e))
@@ -207,7 +210,10 @@ def _(rid, params: dict) -> dict:
     # secrets a clone brought along) and auth.json (only when absent), then
     # inherit model.provider/model.default unless the caller pinned a model.
     mirrored = {"env": False, "auth": False, "model_inherited": False, "voice": False}
-    if is_truthy_value(params.get("mirror_credentials", True)):
+    inherit_launch_profile = params.get("inherit") != "none" and is_truthy_value(
+        params.get("mirror_credentials", True)
+    )
+    if inherit_launch_profile:
         import shutil
 
         from hermes_constants import get_hermes_home
@@ -294,7 +300,7 @@ def _(rid, params: dict) -> dict:
         except Exception:
             return False
 
-    if is_truthy_value(params.get("mirror_credentials", True)):
+    if inherit_launch_profile:
         mirrored["voice"] = _mirror_voice_sections()
 
     if model and provider:
@@ -305,7 +311,7 @@ def _(rid, params: dict) -> dict:
             model_set = True
         except Exception:
             pass
-    elif is_truthy_value(params.get("mirror_credentials", True)) and not (path / "config.yaml").exists():
+    elif inherit_launch_profile and not (path / "config.yaml").exists():
         # No explicit pin and no cloned config: inherit the launch profile's
         # provider+model so the first turn resolves. Same writer as the pin.
         try:
@@ -586,6 +592,25 @@ def _(rid, params: dict) -> dict:
         return _ok(rid, {"ok": all(applied.values()) if applied else True, "applied": applied})
     except Exception as e:
         return _err(rid, 5064, str(e))
+
+
+@method("profiles.delete")
+def _(rid, params: dict) -> dict:
+    """Delete one validated profile after the client confirms the action."""
+    name = str(params.get("name") or "").strip()
+    if not name:
+        return _err(rid, 4063, "name required")
+    try:
+        from hermes_cli import profiles as profiles_mod
+
+        path = profiles_mod.delete_profile(name, yes=True)
+        return _ok(rid, {"ok": True, "path": str(path)})
+    except FileNotFoundError as e:
+        return _err(rid, 4064, str(e))
+    except ValueError as e:
+        return _err(rid, 4065, str(e))
+    except Exception as e:
+        return _err(rid, 5067, str(e))
 
 
 @method("profiles.set_asset")

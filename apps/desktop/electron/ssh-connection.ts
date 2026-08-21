@@ -197,7 +197,10 @@ function baseSshOptions(controlPath, connectTimeoutMs?, hostKeyPolicy?: any) {
 }
 
 function defaultHostKeyOptions(): string[] {
-  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') {
+  if (
+    process.env.HERMES_DESKTOP_SKU === 'bot-linux-mini' ||
+    process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only'
+  ) {
     throw new Error('SSH-only builds require an explicit, pre-seeded host-key policy.')
   }
 

@@ -148,6 +148,155 @@ function validGatewayProfile(value: unknown): boolean {
   )
 }
 
+function validMiniBotUiMeta(value: unknown): boolean {
+  if (!plainRecord(value) || !exactKeys(value, ['chat', 'color', 'created', 'shape', 'title'])) {
+    return false
+  }
+
+  return (
+    (!('chat' in value) || (typeof value.chat === 'string' && value.chat.length <= 256)) &&
+    (!('color' in value) || (typeof value.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(value.color))) &&
+    (!('created' in value) || (Number.isSafeInteger(value.created) && Number(value.created) >= 0)) &&
+    (!('shape' in value) ||
+      (typeof value.shape === 'string' &&
+        ['circle', 'squircle', 'pill', 'triangle', 'hexagon', 'cloud', 'drop'].includes(value.shape))) &&
+    (!('title' in value) || (typeof value.title === 'string' && value.title.length <= 256))
+  )
+}
+
+function validMiniBotParams(method: string, params: Record<string, unknown>): boolean {
+  if (method === 'profiles.list') {
+    return (
+      exactKeys(params, ['include_sessions']) &&
+      (!('include_sessions' in params) || typeof params.include_sessions === 'boolean')
+    )
+  }
+
+  if (method === 'session.list') {
+    return (
+      exactKeys(params, ['limit', 'profile']) &&
+      validGatewayProfile(params.profile) &&
+      Number.isInteger(params.limit) &&
+      Number(params.limit) >= 1 &&
+      Number(params.limit) <= 100
+    )
+  }
+
+  if (method === 'profiles.describe' || method === 'profiles.delete') {
+    return (
+      exactKeys(params, ['name']) &&
+      validGatewayProfile(params.name) &&
+      (method !== 'profiles.delete' || params.name !== 'default')
+    )
+  }
+
+  if (method === 'profiles.create') {
+    return (
+      exactKeys(params, ['clone_from', 'description', 'inherit', 'model', 'name', 'no_skills', 'provider', 'soul']) &&
+      validGatewayProfile(params.name) &&
+      params.name !== 'default' &&
+      (params.clone_from === null || validGatewayProfile(params.clone_from)) &&
+      params.inherit === 'none' &&
+      (!('description' in params) || (typeof params.description === 'string' && params.description.length <= 2048)) &&
+      (!('no_skills' in params) || typeof params.no_skills === 'boolean') &&
+      (!('soul' in params) || (typeof params.soul === 'string' && params.soul.length <= 100_000)) &&
+      ((!('model' in params) && !('provider' in params)) ||
+        (typeof params.model === 'string' &&
+          params.model.length <= 256 &&
+          typeof params.provider === 'string' &&
+          params.provider.length <= 128))
+    )
+  }
+
+  if (method === 'profiles.configure') {
+    const allowed = ['description', 'model', 'name', 'provider', 'soul', 'ui_meta']
+
+    if (!exactKeys(params, allowed) || !validGatewayProfile(params.name)) {
+      return false
+    }
+
+    if ('description' in params && (typeof params.description !== 'string' || params.description.length > 2048)) {
+      return false
+    }
+
+    if ('soul' in params && (typeof params.soul !== 'string' || params.soul.length > 100_000)) {
+      return false
+    }
+
+    if (
+      ('model' in params || 'provider' in params) &&
+      !(
+        typeof params.model === 'string' &&
+        params.model.length <= 256 &&
+        typeof params.provider === 'string' &&
+        params.provider.length <= 128
+      )
+    ) {
+      return false
+    }
+
+    if ('ui_meta' in params) {
+      if (
+        !plainRecord(params.ui_meta) ||
+        !exactKeys(params.ui_meta, ['hermes-bots']) ||
+        !validMiniBotUiMeta(params.ui_meta['hermes-bots'])
+      ) {
+        return false
+      }
+    }
+
+    return true
+  }
+
+  if (method === 'profiles.set_asset') {
+    return (
+      exactKeys(params, ['asset', 'clear', 'data', 'name']) &&
+      validGatewayProfile(params.name) &&
+      params.asset === 'avatar' &&
+      ((params.clear === true && !('data' in params)) ||
+        (typeof params.data === 'string' &&
+          params.data.length > 0 &&
+          params.data.length <= 2_800_000 &&
+          !('clear' in params)))
+    )
+  }
+
+  if (method === 'cron.manage') {
+    const action = params.action
+
+    if (action === 'list') {
+      return exactKeys(params, ['action', 'include_disabled']) && params.include_disabled === true
+    }
+
+    if (action === 'pause' || action === 'remove' || action === 'resume') {
+      return (
+        exactKeys(params, ['action', 'name']) &&
+        typeof params.name === 'string' &&
+        params.name.length > 0 &&
+        params.name.length <= 256
+      )
+    }
+
+    return (
+      action === 'add' &&
+      exactKeys(params, ['action', 'name', 'prompt', 'repeat', 'schedule']) &&
+      typeof params.name === 'string' &&
+      params.name.length > 0 &&
+      params.name.length <= 256 &&
+      typeof params.prompt === 'string' &&
+      params.prompt.length > 0 &&
+      params.prompt.length <= 100_000 &&
+      typeof params.schedule === 'string' &&
+      params.schedule.length > 0 &&
+      params.schedule.length <= 512 &&
+      (!('repeat' in params) ||
+        (Number.isInteger(params.repeat) && Number(params.repeat) >= 1 && Number(params.repeat) <= 10_000))
+    )
+  }
+
+  return false
+}
+
 function validMiniPath(value: unknown): boolean {
   if (typeof value !== 'string' || value.length === 0 || value.length > 4096 || !value.startsWith('/')) {
     return false
@@ -160,7 +309,7 @@ function validMiniPath(value: unknown): boolean {
   })
 }
 
-function validGatewayParams(method: string, params: Record<string, unknown>): boolean {
+function validGatewayParams(method: string, params: Record<string, unknown>, linuxMini = false): boolean {
   if (!boundedJson(params)) {
     return false
   }
@@ -231,6 +380,10 @@ function validGatewayParams(method: string, params: Record<string, unknown>): bo
       params.name.length <= 512 &&
       params.path === ''
     )
+  }
+
+  if (linuxMini && validMiniBotParams(method, params)) {
+    return true
   }
 
   if (!SAFE_GATEWAY_METHODS.has(method) || !exactKeys(params, SAFE_METHOD_PARAM_KEYS[method] || [])) {
@@ -310,7 +463,7 @@ function validGatewayParams(method: string, params: Record<string, unknown>): bo
   return true
 }
 
-function assertGatewayFrame(data: unknown): void {
+function assertGatewayFrame(data: unknown, linuxMini = false): void {
   if (typeof data !== 'string' || data.length === 0 || data.length > MAX_GATEWAY_FRAME_BYTES) {
     return denied()
   }
@@ -331,7 +484,7 @@ function assertGatewayFrame(data: unknown): void {
     return denied()
   }
 
-  if (!validGatewayParams(frame.method, frame.params)) {
+  if (!validGatewayParams(frame.method, frame.params, linuxMini)) {
     return denied()
   }
 }
@@ -364,9 +517,13 @@ function assertVoiceFrame(data: unknown): void {
   return denied()
 }
 
-export function assertSshOnlyGatewayProxyDataAllowed(purpose: GatewayProxyPurpose, data: unknown): void {
+export function assertSshOnlyGatewayProxyDataAllowed(
+  purpose: GatewayProxyPurpose,
+  data: unknown,
+  linuxMini = false
+): void {
   if (purpose === 'gateway') {
-    return assertGatewayFrame(data)
+    return assertGatewayFrame(data, linuxMini)
   }
 
   if (purpose === 'voice') {

@@ -40,10 +40,11 @@ test('inventory classifies every exact renderer entry point without wildcard gra
 
 test('SSH-only policy exactly removes compile-time omitted handlers while retaining the proxy', () => {
   const sshOnlyPolicy = ipcChannelPolicyForSku('bot-ssh-only')
+  const miniPolicy = ipcChannelPolicyForSku('bot-linux-mini')
   const fullPolicy = ipcChannelPolicyForSku('bot')
 
   assert.equal(fullPolicy, IPC_CHANNEL_POLICY)
-  assert.equal(Object.keys(sshOnlyPolicy).length, 119)
+  assert.equal(Object.keys(sshOnlyPolicy).length, 46)
   assert.equal(SSH_ONLY_OMITTED_IPC_CHANNELS.length, 48)
 
   for (const channel of SSH_ONLY_OMITTED_IPC_CHANNELS) {
@@ -53,6 +54,13 @@ test('SSH-only policy exactly removes compile-time omitted handlers while retain
   assert.ok(sshOnlyPolicy[GATEWAY_PROXY_CHANNELS.start])
   assert.ok(sshOnlyPolicy[GATEWAY_PROXY_CHANNELS.send])
   assert.ok(sshOnlyPolicy[GATEWAY_PROXY_CHANNELS.close])
+  assert.equal(Object.keys(miniPolicy).length, 50)
+  assert.ok(miniPolicy['hermes:mini-desktop:start'])
+  assert.ok(miniPolicy['hermes:mini-desktop:send'])
+  assert.ok(miniPolicy['hermes:mini-desktop:ack'])
+  assert.ok(miniPolicy['hermes:mini-desktop:close'])
+  assert.equal(miniPolicy['hermes:terminal:start'], undefined)
+  assert.throws(() => ipcChannelPolicyForSku('bot-linux-minii'), /Unknown desktop SKU/)
 })
 
 test('secondary windows have no host-impact capability grants', () => {

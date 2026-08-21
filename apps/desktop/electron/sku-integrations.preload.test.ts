@@ -4,6 +4,7 @@ import { test } from 'vitest'
 
 import { createSkuPreloadBridge as createSshOnlyBridge } from './sku-integrations.preload.disabled'
 import { createSkuPreloadBridge as createFullBridge } from './sku-integrations.preload.full'
+import { createSkuPreloadBridge as createMiniBridge } from './sku-integrations.preload.mini'
 
 const ipcRenderer = {
   invoke: () => Promise.resolve(undefined),
@@ -49,4 +50,33 @@ test('full-product preload retains its integration surface', () => {
   assert.equal(typeof bridge.themes.searchMarketplace, 'function')
   assert.equal(typeof bridge.updates.apply, 'function')
   assert.equal(typeof bridge.uninstall.run, 'function')
+})
+
+test('Linux Mini preload adds only the fixed Mini desktop byte channel to the strict SSH bridge', () => {
+  const sends: unknown[][] = []
+
+  const bridge = createMiniBridge({
+    ...ipcRenderer,
+    send: (...args: unknown[]) => sends.push(args)
+  } as any)
+
+  assert.deepEqual(Object.keys(bridge).sort(), ['gatewayProxy', 'miniDesktop'])
+  assert.deepEqual(Object.keys(bridge.miniDesktop).sort(), ['ack', 'close', 'onEvent', 'send', 'start'])
+  bridge.miniDesktop.ack('desktop-ack', 123)
+  assert.deepEqual(sends, [['hermes:mini-desktop:ack', { bytes: 123, id: 'desktop-ack' }]])
+
+  for (const property of [
+    'getGatewayWsUrl',
+    'orgoDesktop',
+    'connectors',
+    'cloud',
+    'oauthLoginConnectionConfig',
+    'fetchLinkTitle',
+    'getBootstrapState',
+    'themes',
+    'updates',
+    'uninstall'
+  ]) {
+    assert.equal(bridge[property], undefined)
+  }
 })

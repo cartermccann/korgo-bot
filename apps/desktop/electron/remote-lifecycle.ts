@@ -77,16 +77,18 @@ function validateSpawnNonce(spawnNonce) {
   return value
 }
 
-function ownershipDirectory(ownershipId) {
-  return `${REMOTE_LOCK_DIR}/${validateOwnershipId(ownershipId)}`
+function ownershipDirectory(ownershipId, remoteLockDir = REMOTE_LOCK_DIR) {
+  validateRemotePath(remoteLockDir)
+
+  return `${String(remoteLockDir).replace(/\/+$/, '')}/${validateOwnershipId(ownershipId)}`
 }
 
-function lockfilePath(ownershipId) {
-  return `${ownershipDirectory(ownershipId)}/backend.lock.json`
+function lockfilePath(ownershipId, remoteLockDir = REMOTE_LOCK_DIR) {
+  return `${ownershipDirectory(ownershipId, remoteLockDir)}/backend.lock.json`
 }
 
-function spawnLogPath(ownershipId, spawnNonce) {
-  return `${ownershipDirectory(ownershipId)}/${validateSpawnNonce(spawnNonce)}.log`
+function spawnLogPath(ownershipId, spawnNonce, remoteLockDir = REMOTE_LOCK_DIR) {
+  return `${ownershipDirectory(ownershipId, remoteLockDir)}/${validateSpawnNonce(spawnNonce)}.log`
 }
 
 // shell-single-quote a value for safe interpolation into a remote command.
@@ -254,8 +256,8 @@ async function probeRemoteHermesHome(ssh) {
   }
 }
 
-async function readLockfile(ssh, ownershipId) {
-  const lpath = lockfilePath(ownershipId)
+async function readLockfile(ssh, ownershipId, remoteLockDir = REMOTE_LOCK_DIR) {
+  const lpath = lockfilePath(ownershipId, remoteLockDir)
   let raw
 
   try {
@@ -310,7 +312,7 @@ async function readLockfile(ssh, ownershipId) {
     return null
   }
 
-  if (parsed.logPath !== spawnLogPath(ownershipId, parsed.spawnNonce)) {
+  if (parsed.logPath !== spawnLogPath(ownershipId, parsed.spawnNonce, remoteLockDir)) {
     return null
   }
 
@@ -323,9 +325,9 @@ async function readLockfile(ssh, ownershipId) {
   return parsed
 }
 
-async function writeLockfile(ssh, ownershipId, lock) {
-  const directory = ownershipDirectory(ownershipId)
-  const lpath = lockfilePath(ownershipId)
+async function writeLockfile(ssh, ownershipId, lock, remoteLockDir = REMOTE_LOCK_DIR) {
+  const directory = ownershipDirectory(ownershipId, remoteLockDir)
+  const lpath = lockfilePath(ownershipId, remoteLockDir)
   const temporaryPath = `${directory}/.${crypto.randomBytes(8).toString('hex')}.lock.tmp`
   const json = JSON.stringify({ ...lock, schemaVersion: LOCKFILE_SCHEMA_VERSION })
   await ssh.exec(
@@ -335,8 +337,8 @@ async function writeLockfile(ssh, ownershipId, lock) {
   )
 }
 
-async function removeLockfile(ssh, ownershipId) {
-  const lpath = lockfilePath(ownershipId)
+async function removeLockfile(ssh, ownershipId, remoteLockDir = REMOTE_LOCK_DIR) {
+  const lpath = lockfilePath(ownershipId, remoteLockDir)
 
   try {
     await ssh.exec(`rm -f ${expandRemotePath(lpath)}`)
@@ -407,7 +409,7 @@ async function pidIsOurDashboard(ssh, pid, spawnNonce, hermesPath = '') {
 }
 
 // Kill the stale dashboard ONLY if provably ours, then drop the lockfile.
-async function cleanupStale(ssh, ownershipId, lock, pidAlive = true) {
+async function cleanupStale(ssh, ownershipId, lock, pidAlive = true, remoteLockDir = REMOTE_LOCK_DIR) {
   if (pidAlive && lock && (await pidIsOurDashboard(ssh, lock.pid, lock.spawnNonce, lock.hermesPath))) {
     try {
       const result = (
@@ -427,7 +429,7 @@ async function cleanupStale(ssh, ownershipId, lock, pidAlive = true) {
     }
   }
 
-  const expectedLogPath = lock?.spawnNonce ? spawnLogPath(ownershipId, lock.spawnNonce) : ''
+  const expectedLogPath = lock?.spawnNonce ? spawnLogPath(ownershipId, lock.spawnNonce, remoteLockDir) : ''
 
   if (lock?.logPath === expectedLogPath) {
     try {
@@ -437,7 +439,7 @@ async function cleanupStale(ssh, ownershipId, lock, pidAlive = true) {
     }
   }
 
-  await removeLockfile(ssh, ownershipId)
+  await removeLockfile(ssh, ownershipId, remoteLockDir)
 }
 
 // Detach so the backend survives the SSH channel closing: setsid (Linux)
@@ -511,7 +513,7 @@ async function scrapeReadyPort(ssh, logPath, { timeoutMs = DEFAULT_READY_TIMEOUT
   throw err
 }
 
-async function spawnRemoteDashboard(ssh, { hermesPath, profile, token, ownershipId }) {
+async function spawnRemoteDashboard(ssh, { hermesPath, profile, token, ownershipId, remoteLockDir = REMOTE_LOCK_DIR }) {
   if (!(await remoteSupportsSshOwnership(ssh, hermesPath))) {
     const err: any = new Error(
       'The remote Hermes install does not support --ssh-session-token-file and --ssh-owner-nonce. ' +
@@ -523,9 +525,9 @@ async function spawnRemoteDashboard(ssh, { hermesPath, profile, token, ownership
   }
 
   const spawnNonce = crypto.randomBytes(8).toString('hex')
-  const tokenDir = ownershipDirectory(ownershipId)
+  const tokenDir = ownershipDirectory(ownershipId, remoteLockDir)
   const tokenFilePath = `${tokenDir}/${spawnNonce}.token`
-  const logPath = spawnLogPath(ownershipId, spawnNonce)
+  const logPath = spawnLogPath(ownershipId, spawnNonce, remoteLockDir)
 
   const tokenUploadPy =
     'import os,sys,stat\n' +
@@ -687,6 +689,8 @@ async function connect(deps) {
     probeReuseProof,
     adoptServedToken,
     rememberLog = () => {},
+    remoteLockDir = REMOTE_LOCK_DIR,
+    remoteHermesHome = '',
     readyTimeoutMs = DEFAULT_READY_TIMEOUT_MS,
     signal
   } = deps
@@ -713,8 +717,9 @@ async function connect(deps) {
   }
 
   const reuseToken = deps.reuseToken || ''
-  const hermesHome = await probeRemoteHermesHome(ssh)
-  const lock = await readLockfile(ssh, ownershipId)
+  validateRemotePath(remoteLockDir)
+  const hermesHome = remoteHermesHome || (await probeRemoteHermesHome(ssh))
+  const lock = await readLockfile(ssh, ownershipId, remoteLockDir)
 
   if (lock) {
     const pidAlive = await remotePidAlive(ssh, lock.pid)
@@ -750,7 +755,7 @@ async function connect(deps) {
         if (reuseClassification === 'authenticated-stale') {
           assertNotAborted(signal)
           await cancelForwardSafe(deps, localPort, lock.port)
-          await cleanupStale(ssh, ownershipId, lock)
+          await cleanupStale(ssh, ownershipId, lock, true, remoteLockDir)
         } else if (reuseClassification === 'authenticated-ok') {
           const token = await adoptOwnedServedToken(
             adoptServedToken,
@@ -790,7 +795,7 @@ async function connect(deps) {
       }
     } else {
       assertNotAborted(signal)
-      await cleanupStale(ssh, ownershipId, lock, pidAlive)
+      await cleanupStale(ssh, ownershipId, lock, pidAlive, remoteLockDir)
     }
   }
 
@@ -801,7 +806,8 @@ async function connect(deps) {
     hermesPath,
     profile,
     token: spawnToken,
-    ownershipId
+    ownershipId,
+    remoteLockDir
   })
 
   log(`spawned remote dashboard pid=${pid}`)
@@ -829,7 +835,7 @@ async function connect(deps) {
     // lockless orphan — the next connect reaps it by exact ownership via this
     // record. Inside the try: if this write itself fails, the catch still
     // kills the just-spawned process via the in-memory record.
-    await writeLockfile(ssh, ownershipId, ownedSpawn)
+    await writeLockfile(ssh, ownershipId, ownedSpawn, remoteLockDir)
     remotePort = await scrapeReadyPort(ssh, logPath, {
       timeoutMs: readyTimeoutMs,
       isAlive: () => remotePidAlive(ssh, pid),
@@ -848,7 +854,7 @@ async function connect(deps) {
 
     assertNotAborted(signal)
     const tokenFingerprint = fingerprintToken(token)
-    await writeLockfile(ssh, ownershipId, { ...ownedSpawn, port: remotePort, tokenFingerprint })
+    await writeLockfile(ssh, ownershipId, { ...ownedSpawn, port: remotePort, tokenFingerprint }, remoteLockDir)
     assertNotAborted(signal)
 
     return {
@@ -877,7 +883,7 @@ async function connect(deps) {
       void 0
     }
 
-    await cleanupStale(ssh, ownershipId, ownedSpawn)
+    await cleanupStale(ssh, ownershipId, ownedSpawn, true, remoteLockDir)
     throw error
   }
 }

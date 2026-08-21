@@ -51,6 +51,24 @@ test('beforePack default export resolves even when cleanup throws', async () => 
   await assert.doesNotReject(beforePack({ appOutDir: '', electronPlatformName: 'linux' }))
 })
 
+test('beforePack rejects an unknown SKU before cleaning the target directory', async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-before-pack-'))
+  const previousSku = process.env.HERMES_DESKTOP_SKU
+  const appOutDir = path.join(tempRoot, 'linux-unpacked')
+  fs.mkdirSync(appOutDir)
+  fs.writeFileSync(path.join(appOutDir, 'sentinel'), 'keep', 'utf8')
+  process.env.HERMES_DESKTOP_SKU = 'bot-linux-minii'
+
+  try {
+    await assert.rejects(beforePack({ appOutDir, electronPlatformName: 'linux' }), /Unknown desktop SKU/)
+    assert.equal(fs.readFileSync(path.join(appOutDir, 'sentinel'), 'utf8'), 'keep')
+  } finally {
+    if (previousSku === undefined) delete process.env.HERMES_DESKTOP_SKU
+    else process.env.HERMES_DESKTOP_SKU = previousSku
+    fs.rmSync(tempRoot, { recursive: true, force: true })
+  }
+})
+
 // ─── Windows rollback preservation (#69179) ────────────────────────────────
 
 test('preserveRollbackBackup moves a working build to .bak', () => {

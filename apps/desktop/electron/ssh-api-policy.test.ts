@@ -93,13 +93,68 @@ test('SSH-only API policy rejects configuration, credential, operational, upload
   }
 })
 
+test('Linux Mini API policy permits exact routine operations without widening the base SSH client', () => {
+  const miniAllowed = [
+    { path: '/api/cron/jobs?profile=default' },
+    { path: '/api/cron/jobs/job-1' },
+    { path: '/api/cron/jobs/job-1/runs?limit=25' },
+    {
+      body: { name: 'Daily review', prompt: 'Review the shared workspace.', schedule: '0 9 * * *' },
+      method: 'POST',
+      path: '/api/cron/jobs'
+    },
+    {
+      body: { updates: { enabled: false, name: 'Paused review' } },
+      method: 'PUT',
+      path: '/api/cron/jobs/job-1'
+    },
+    { method: 'POST', path: '/api/cron/jobs/job-1/pause' },
+    { method: 'POST', path: '/api/cron/jobs/job-1/resume' },
+    { method: 'POST', path: '/api/cron/jobs/job-1/trigger' },
+    { method: 'DELETE', path: '/api/cron/jobs/job-1' }
+  ]
+
+  for (const request of miniAllowed) {
+    assert.throws(() => assertSshOnlyApiRequestAllowed(request), /unavailable/, JSON.stringify(request))
+    assert.doesNotThrow(() => assertSshOnlyApiRequestAllowed(request, true), JSON.stringify(request))
+  }
+})
+
+test('Linux Mini API policy rejects cron query and body smuggling before backend side effects', () => {
+  const denied = [
+    { path: '/api/cron/jobs' },
+    { path: '/api/cron/jobs?profile=../../root' },
+    { path: '/api/cron/jobs?profile=default&token=secret' },
+    { path: '/api/cron/jobs/job-1?verbose=1' },
+    { path: '/api/cron/jobs/job-1/runs?limit=101' },
+    { path: '/api/cron/jobs/job-1/runs?limit=1&limit=2' },
+    {
+      body: { api_key: 'secret', name: 'job', prompt: 'x', schedule: '* * * * *' },
+      method: 'POST',
+      path: '/api/cron/jobs'
+    },
+    {
+      body: { name: 'job', prompt: 'x', schedule: '* * * * *', unknown: true },
+      method: 'POST',
+      path: '/api/cron/jobs'
+    },
+    { body: {}, method: 'POST', path: '/api/cron/jobs/job-1/trigger' },
+    { body: { updates: { token: 'secret' } }, method: 'PUT', path: '/api/cron/jobs/job-1' },
+    { method: 'DELETE', path: '/api/cron/jobs/job-1?profile=default' }
+  ]
+
+  for (const request of denied) {
+    assert.throws(() => assertSshOnlyApiRequestAllowed(request, true), /unavailable/, JSON.stringify(request))
+  }
+})
+
 test('main authorizes SSH REST requests before routing or backend side effects', () => {
   const source = fs.readFileSync(fileURLToPath(new URL('./main.ts', import.meta.url)), 'utf8')
   const handlerStart = source.indexOf("ipcMain.handle('hermes:api'")
   const handler = source.slice(handlerStart, source.indexOf("\nipcMain.handle('hermes:ambient:claim'", handlerStart))
 
   assert.notEqual(handlerStart, -1)
-  const policyIndex = handler.indexOf('assertSshOnlyApiRequestAllowed(request)')
+  const policyIndex = handler.indexOf('assertSshOnlyApiRequestAllowed(request,')
 
   assert.ok(policyIndex >= 0, 'SSH policy must be called by the generic REST handler')
 

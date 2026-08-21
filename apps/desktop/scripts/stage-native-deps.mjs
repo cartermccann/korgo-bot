@@ -11,6 +11,8 @@
 
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
+
+import { validateDesktopBuildEnvironment } from './desktop-sku.mjs'
 import { dirname, resolve, join } from 'node:path'
 import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
@@ -534,7 +536,11 @@ export function removeStagedHostNativeDeps(distRoot = resolve(projectRoot, 'dist
 
 // Allow direct CLI invocation: node scripts/stage-native-deps.mjs [platform] [arch]
 if (isMain(import.meta.url)) {
-  if (process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only') {
+  const selectedSku = validateDesktopBuildEnvironment()
+  if (
+    selectedSku === 'bot-linux-mini' ||
+    selectedSku === 'bot-ssh-only'
+  ) {
     const removed = removeStagedHostNativeDeps()
     console.log(`[stage-native-deps] SSH-only SKU excludes host native dependencies (${removed.join(', ') || 'clean'})`)
   } else {

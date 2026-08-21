@@ -6,6 +6,8 @@ import react from '@vitejs/plugin-react'
 import ts from 'typescript'
 import { defineConfig } from 'vite'
 
+import { validateDesktopBuildEnvironment } from './scripts/desktop-sku.mjs'
+
 // `hgui` symlinks a worktree's node_modules to the main checkout. Vite realpaths
 // those before enforcing server.fs.allow, so codicon/font assets resolve outside
 // the worktree root and 404. Whitelist the real node_modules locations.
@@ -44,16 +46,9 @@ const debugEntry = (command: string, env: Record<string, string>) =>
     ? path.resolve(import.meta.dirname, './src/debug/dev-only.ts')
     : path.resolve(import.meta.dirname, './src/debug/dev-only.noop.ts')
 
-const desktopSku = (): 'hermes' | 'bot' | 'bot-ssh-only' => {
-  if (process.env.VITE_HERMES_DESKTOP_SKU === 'bot-ssh-only') {
-    return 'bot-ssh-only'
-  }
-
-  if (process.env.VITE_HERMES_DESKTOP_SKU === 'bot' || process.env.VITE_HERMES_DESKTOP_PRODUCT === 'bot') {
-    return 'bot'
-  }
-
-  return 'hermes'
+const desktopSku = (): 'hermes' | 'bot' | 'bot-linux-mini' | 'bot-ssh-only' => {
+  return validateDesktopBuildEnvironment(process.env, { requireAligned: true }) as
+    'hermes' | 'bot' | 'bot-linux-mini' | 'bot-ssh-only'
 }
 
 // The emoji picker (frimousse) fetches `<emojibaseUrl>/<locale>/data.json` at
@@ -149,6 +144,13 @@ function sanitizeSshOnlyEnglish(source: string): string {
         ? node.name.text
         : null
 
+    // The dedicated SSH setup/error contract is already deliberately written
+    // for this SKU. Keep it intact even when individual values mention the
+    // fixed identity or the fact that no cloud runtime is launched.
+    if (propertyName?.startsWith('sshOnly')) {
+      return
+    }
+
     if (propertyName && SSH_FORBIDDEN_I18N_ACTION_KEYS.has(propertyName)) {
       replacements.push({
         start: node.getStart(file),
@@ -223,10 +225,13 @@ const sshOnlyContentSecurityPolicy = (enabled: boolean) => ({
 
 export default defineConfig(({ command }) => {
   const sku = desktopSku()
-  const sshOnly = sku === 'bot-ssh-only'
+  const linuxMini = sku === 'bot-linux-mini'
+  const sshOnly = linuxMini || sku === 'bot-ssh-only'
 
   const rendererSkuModule = (full: string, disabled: string) =>
     path.resolve(import.meta.dirname, sshOnly ? disabled : full)
+  const rendererMiniModule = (full: string, disabled: string, mini: string) =>
+    path.resolve(import.meta.dirname, linuxMini ? mini : sshOnly ? disabled : full)
 
   const linkTitleClient = path.resolve(
     import.meta.dirname,
@@ -346,6 +351,16 @@ export default defineConfig(({ command }) => {
         '@desktop/bot-image-unavailable-copy': rendererSkuModule(
           './src/plugins/hermes-bots/image-unavailable-copy.full.js',
           './src/plugins/hermes-bots/image-unavailable-copy.disabled.js'
+        ),
+        '@desktop/bot-profile-create-policy': rendererMiniModule(
+          './src/plugins/hermes-bots/profile-create-policy.full.js',
+          './src/plugins/hermes-bots/profile-create-policy.full.js',
+          './src/plugins/hermes-bots/profile-create-policy.mini.js'
+        ),
+        '@desktop/bot-profile-operations': rendererMiniModule(
+          './src/plugins/hermes-bots/profile-operations.full.ts',
+          './src/plugins/hermes-bots/profile-operations.full.ts',
+          './src/plugins/hermes-bots/profile-operations.mini.ts'
         ),
         '@desktop/boot-failure-overlay': rendererSkuModule(
           './src/components/boot-failure-overlay.tsx',
@@ -469,13 +484,15 @@ export default defineConfig(({ command }) => {
           './src/app/session/hooks/use-prompt-actions/journey-slash-action.full.ts',
           './src/app/session/hooks/use-prompt-actions/journey-slash-action.disabled.ts'
         ),
-        '@desktop/integration-store': rendererSkuModule(
+        '@desktop/integration-store': rendererMiniModule(
           './src/app/right-sidebar/store.full.ts',
-          './src/app/right-sidebar/store.disabled.ts'
+          './src/app/right-sidebar/store.disabled.ts',
+          './src/app/right-sidebar/store.mini.ts'
         ),
-        '@desktop/integration-surfaces': rendererSkuModule(
+        '@desktop/integration-surfaces': rendererMiniModule(
           './src/app/contrib/integration-surfaces.full.tsx',
-          './src/app/contrib/integration-surfaces.disabled.tsx'
+          './src/app/contrib/integration-surfaces.disabled.tsx',
+          './src/app/contrib/integration-surfaces.mini.tsx'
         ),
         '@desktop/local-file-surfaces': rendererSkuModule(
           './src/app/contrib/local-file-surfaces.full.ts',
@@ -532,7 +549,14 @@ export default defineConfig(({ command }) => {
           './src/app/session/hooks/use-message-stream/mini-owned-events.full.ts',
           './src/app/session/hooks/use-message-stream/mini-owned-events.disabled.ts'
         ),
-        '@desktop/plugin-discovery': rendererSkuModule('./src/contrib/plugins.ts', './src/contrib/plugins.disabled.ts'),
+        '@desktop/plugin-discovery': rendererMiniModule(
+          './src/contrib/plugins.ts',
+          './src/contrib/plugins.disabled.ts',
+          './src/contrib/plugins.bot-only.ts'
+        ),
+        '@desktop/plugin-context': linuxMini
+          ? path.resolve(__dirname, './src/contrib/plugin.mini.ts')
+          : path.resolve(__dirname, './src/contrib/plugin.ts'),
         '@desktop/model-picker-provider-action': rendererSkuModule(
           './src/components/model-picker-provider-action.full.tsx',
           './src/components/model-picker-provider-action.disabled.tsx'
@@ -609,9 +633,10 @@ export default defineConfig(({ command }) => {
           './src/app/hooks/profile-create-action.full.ts',
           './src/app/hooks/profile-create-action.disabled.ts'
         ),
-        '@desktop/product-layout-policy': rendererSkuModule(
+        '@desktop/product-layout-policy': rendererMiniModule(
           './src/app/contrib/product-layout-policy.full.ts',
-          './src/app/contrib/product-layout-policy.disabled.ts'
+          './src/app/contrib/product-layout-policy.disabled.ts',
+          './src/app/contrib/product-layout-policy.mini.ts'
         ),
         '@desktop/preview-tiles': rendererSkuModule(
           './src/app/chat/preview-tile.tsx',
@@ -624,6 +649,11 @@ export default defineConfig(({ command }) => {
         '@desktop/runtime-readiness-copy': rendererSkuModule(
           './src/lib/runtime-readiness-copy.full.ts',
           './src/lib/runtime-readiness-copy.disabled.ts'
+        ),
+        '@desktop/ssh-remote-runtime-policy': rendererMiniModule(
+          './src/lib/ssh-remote-runtime-policy.full.ts',
+          './src/lib/ssh-remote-runtime-policy.full.ts',
+          './src/lib/ssh-remote-runtime-policy.mini.ts'
         ),
         '@desktop/runtime-plugin-loader': rendererSkuModule(
           './src/contrib/runtime-loader.ts',
@@ -811,9 +841,10 @@ export default defineConfig(({ command }) => {
         '@/store/updates': rendererSkuModule('./src/store/updates.ts', './src/store/updates.disabled.ts'),
         '@/debug/dev-only': debugEntry(command, process.env as Record<string, string>),
         '@': path.resolve(import.meta.dirname, './src'),
-        '@bot-mode/plugin': rendererSkuModule(
+        '@bot-mode/plugin': rendererMiniModule(
           './src/plugins/hermes-bots/legacy-plugin.js',
-          './src/plugins/hermes-bots/legacy-plugin.disabled.js'
+          './src/plugins/hermes-bots/legacy-plugin.disabled.js',
+          './src/plugins/hermes-bots/legacy-plugin.js'
         ),
         '@hermes/plugin-sdk': path.resolve(import.meta.dirname, './src/sdk/index.ts'),
         '@hermes/shared/billing': path.resolve(import.meta.dirname, '../shared/src/billing-types.ts'),

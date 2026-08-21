@@ -64,6 +64,8 @@ import {
 } from '@hermes/plugin-sdk'
 import { syncConnectorsForRoster } from '@desktop/bot-integration-sync'
 import { IMAGE_UNAVAILABLE_COPY } from '@desktop/bot-image-unavailable-copy'
+import { PROFILE_CREATE_POLICY } from '@desktop/bot-profile-create-policy'
+import { deleteBotProfileRequest, updateBotDescription } from '@desktop/bot-profile-operations'
 import { useEffect, useRef, useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
@@ -369,10 +371,7 @@ function mergeServerMeta(roster) {
       // Local session handoffs reach the renderer before profiles.configure
       // necessarily reaches profiles.list. Keep the foreground pin while that
       // server copy catches up, including /new and compression rotations.
-      if (
-        mine.chat &&
-        (pendingExplicitNewSession?.name === bot.name || routedStoredSessionId() === mine.chat)
-      ) {
+      if (mine.chat && (pendingExplicitNewSession?.name === bot.name || routedStoredSessionId() === mine.chat)) {
         merged.chat = mine.chat
       }
 
@@ -412,7 +411,8 @@ async function duplicateBot(bot, roster) {
   await host.request('profiles.create', {
     name,
     clone_from: base,
-    description: bot.description || ''
+    description: bot.description || '',
+    ...PROFILE_CREATE_POLICY
   })
   clearDeletedBotTombstone(name)
 
@@ -431,7 +431,11 @@ async function duplicateBot(bot, roster) {
 }
 
 function isProtectedProfile(name) {
-  return String(name || '').trim().toLowerCase() === 'default'
+  return (
+    String(name || '')
+      .trim()
+      .toLowerCase() === 'default'
+  )
 }
 
 /** Live gateway sessions keep `state.db` open. SQLite then mkdir's the
@@ -501,27 +505,6 @@ function filterDeletedRoster(roster) {
   }
 
   return roster.filter(bot => !isRecentlyDeleted(bot.name))
-}
-
-function cliExecFailed(result) {
-  const payload = result?.result && typeof result.result === 'object' ? result.result : result
-
-  if (payload?.blocked) {
-    return payload.hint || 'Delete was blocked by the gateway.'
-  }
-
-  const code = payload?.code
-  const output = String(payload?.output || '')
-
-  if (typeof code === 'number' && code !== 0) {
-    return output.trim().slice(-400) || `Delete failed (exit ${code})`
-  }
-
-  if (/\bcancelled\b/i.test(output) && !/deleted/i.test(output)) {
-    return output.trim().slice(-400) || 'Delete was cancelled.'
-  }
-
-  return null
 }
 
 /** Pure local cleanup after a profile is gone. Kept free of host/storage so
@@ -753,11 +736,7 @@ async function closeLiveSessionsForBot(bot) {
     /* older gateway — closing the tracked runtime still helps */
   }
 
-  await Promise.all(
-    [...toClose].map(id =>
-      host.request('session.close', { session_id: id }).catch(() => undefined)
-    )
-  )
+  await Promise.all([...toClose].map(id => host.request('session.close', { session_id: id }).catch(() => undefined)))
   liveBotRuntimes.delete(name)
 }
 
@@ -772,14 +751,7 @@ async function profileStillListed(name) {
 }
 
 async function runProfileDeleteCli(name) {
-  const result = await host.request('cli.exec', {
-    argv: ['profile', 'delete', '-y', name]
-  })
-  const failed = cliExecFailed(result)
-
-  if (failed) {
-    throw new Error(failed)
-  }
+  await deleteBotProfileRequest(host, name)
 }
 
 async function deleteBotProfile(bot) {
@@ -872,8 +844,7 @@ function DeleteBotDialog({ bot, open, onClose }) {
         }),
         error
           ? jsx('div', {
-              className:
-                'rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive',
+              className: 'rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive',
               children: error
             })
           : null,
@@ -961,11 +932,15 @@ function deleteMenuItems(bot, onDelete) {
 
   return [
     jsx(ContextMenuSeparator, {}, `${bot.name}-delete-sep`),
-    jsx(ContextMenuItem, {
-      variant: 'destructive',
-      onSelect: () => onDelete(bot),
-      children: 'Delete'
-    }, `${bot.name}-delete`)
+    jsx(
+      ContextMenuItem,
+      {
+        variant: 'destructive',
+        onSelect: () => onDelete(bot),
+        children: 'Delete'
+      },
+      `${bot.name}-delete`
+    )
   ]
 }
 
@@ -1464,7 +1439,7 @@ function AvatarPicker({ shape, color, image, onShape, onColor, onImage, generate
   const [describe, setDescribe] = useState('')
   const [genBusy, setGenBusy] = useState(false)
 
-  if (imagen === null) {
+  if (import.meta.env.VITE_HERMES_DESKTOP_SKU !== 'bot-linux-mini' && imagen === null) {
     void probeImagen()
   }
 
@@ -1473,7 +1448,11 @@ function AvatarPicker({ shape, color, image, onShape, onColor, onImage, generate
   const goTab = id => {
     setTab(id)
 
-    if (id === 'generate' && $imagenAvailable.get() === false) {
+    if (
+      import.meta.env.VITE_HERMES_DESKTOP_SKU !== 'bot-linux-mini' &&
+      id === 'generate' &&
+      $imagenAvailable.get() === false
+    ) {
       $imagenAvailable.set(null)
       void probeImagen()
     }
@@ -1546,9 +1525,9 @@ function AvatarPicker({ shape, color, image, onShape, onColor, onImage, generate
         className: 'flex items-center gap-1',
         children: [
           tabButton('bot', 'Bot'),
-          tabButton('generate', 'Generate'),
+          import.meta.env.VITE_HERMES_DESKTOP_SKU !== 'bot-linux-mini' ? tabButton('generate', 'Generate') : null,
           tabButton('upload', 'Upload'),
-          tabButton('pet', 'Pet')
+          import.meta.env.VITE_HERMES_DESKTOP_SKU !== 'bot-linux-mini' ? tabButton('pet', 'Pet') : null
         ]
       }),
 
@@ -1625,7 +1604,7 @@ function AvatarPicker({ shape, color, image, onShape, onColor, onImage, generate
           })
         : null,
 
-      tab === 'generate'
+      import.meta.env.VITE_HERMES_DESKTOP_SKU !== 'bot-linux-mini' && tab === 'generate'
         ? imagen
           ? jsxs('div', {
               className: 'grid w-full gap-2',
@@ -1665,10 +1644,7 @@ function AvatarPicker({ shape, color, image, onShape, onColor, onImage, generate
             })
           : jsx('div', {
               className: 'px-2 py-3 text-center text-xs leading-5 text-(--ui-text-tertiary)',
-              children:
-                imagen === false
-                  ? IMAGE_UNAVAILABLE_COPY
-                  : 'Checking image backend…'
+              children: imagen === false ? IMAGE_UNAVAILABLE_COPY : 'Checking image backend…'
             })
         : null,
 
@@ -1688,7 +1664,9 @@ function AvatarPicker({ shape, color, image, onShape, onColor, onImage, generate
           })
         : null,
 
-      tab === 'pet' ? jsx(PetTab, { image, onImage }) : null
+      import.meta.env.VITE_HERMES_DESKTOP_SKU !== 'bot-linux-mini' && tab === 'pet'
+        ? jsx(PetTab, { image, onImage })
+        : null
     ]
   })
 }
@@ -2001,10 +1979,7 @@ function claimNavigationIntent(target) {
 
 function isCurrentNavigationIntent(intent) {
   return Boolean(
-    !pluginDisposed &&
-      intent &&
-      intent.epoch === navigationIntentEpoch &&
-      intent.target === navigationIntentTarget
+    !pluginDisposed && intent && intent.epoch === navigationIntentEpoch && intent.target === navigationIntentTarget
   )
 }
 
@@ -2039,9 +2014,7 @@ function queueSessionNavigation(storedId, profile, intent) {
 
 function botsMessengerActive() {
   try {
-    return Boolean(
-      document.querySelector('div.absolute:not([data-pane-hidden]) [data-hermes-bots-pane]')
-    )
+    return Boolean(document.querySelector('div.absolute:not([data-pane-hidden]) [data-hermes-bots-pane]'))
   } catch {
     return false
   }
@@ -2182,9 +2155,7 @@ function resolveCanonicalSessionBinding({
   }
 
   const isCanonicalContinuation =
-    eventTitle === CANONICAL_CHAT_TITLE &&
-    Boolean(pinnedId) &&
-    (trackedRuntime === runtimeId || routedId === storedId)
+    eventTitle === CANONICAL_CHAT_TITLE && Boolean(pinnedId) && (trackedRuntime === runtimeId || routedId === storedId)
 
   if (isCanonicalContinuation) {
     return { action: 'advance', profile: eventProfile, sessionId: storedId }
@@ -2225,6 +2196,7 @@ function sessionCreateParamsForBot(name, fallbackBot = null) {
   const bot = botFromRoster(name)
   const params = {
     profile: name,
+    source: 'desktop',
     title: CANONICAL_CHAT_TITLE
   }
   const model = String(bot.model || fallbackBot?.model || '').trim()
@@ -2280,7 +2252,13 @@ function snapToCanonicalIfStray() {
     return
   }
 
-  const name = (draft?.participantIds?.[0] || lastMessengerBot || $selectedBot.get() || host.state.profile.get() || '').trim()
+  const name = (
+    draft?.participantIds?.[0] ||
+    lastMessengerBot ||
+    $selectedBot.get() ||
+    host.state.profile.get() ||
+    ''
+  ).trim()
 
   if (!name) {
     return
@@ -2313,9 +2291,7 @@ function snapToCanonicalIfStray() {
   }
 
   const intent =
-    navigationIntentTarget === target
-      ? { epoch: navigationIntentEpoch, target }
-      : claimNavigationIntent(target)
+    navigationIntentTarget === target ? { epoch: navigationIntentEpoch, target } : claimNavigationIntent(target)
 
   pinningCanonical = true
   void openBotChat(botFromRoster(name), {
@@ -2327,8 +2303,7 @@ function snapToCanonicalIfStray() {
   })
 }
 
-const BOT_MODE_BLOCKED_ACTION_RE =
-  /^(?:profile\.switch\.\d+|session\.slot\.\d+|session\.(?:newTab|next|prev))$/
+const BOT_MODE_BLOCKED_ACTION_RE = /^(?:profile\.switch\.\d+|session\.slot\.\d+|session\.(?:newTab|next|prev))$/
 
 /** Core asks before running a keybind. Claim hidden-tab/profile navigation
  *  while Bot Mode is visible, before it mutates the layout — no snap-back. */
@@ -2613,6 +2588,7 @@ async function createQuickBot(wantedTitle, roster, launchProvider, launchModel) 
     name,
     description: title && slugify(title) !== name ? title : '',
     clone_from: null,
+    ...PROFILE_CREATE_POLICY,
     no_skills: false,
     soul: composeSoul({ name, title, description: '', roster, customSoul: '' }),
     ...modelAssignment
@@ -2645,10 +2621,7 @@ async function createQuickBot(wantedTitle, roster, launchProvider, launchModel) 
 
 async function openBotChat(bot, { intent: suppliedIntent = null, preserveDraft = false, quiet = false } = {}) {
   const target = `bot:${bot.name}`
-  const intent =
-    suppliedIntent?.target === target
-      ? suppliedIntent
-      : claimNavigationIntent(target)
+  const intent = suppliedIntent?.target === target ? suppliedIntent : claimNavigationIntent(target)
 
   if (!isCurrentNavigationIntent(intent)) {
     return
@@ -3364,42 +3337,46 @@ function AdvancedProfileConfig({ bot, state, setState }) {
         value: { provider: state.provider, model: state.model },
         onChange: patch => setState(prev => ({ ...prev, dirtyModel: true, ...patch }))
       }),
-      labeled(
-        `Skills (${enabledSkills}/${state.skills.length} enabled)`,
-        jsxs('div', {
-          className: 'grid gap-1.5 rounded-xl border border-(--ui-stroke-secondary) p-2',
-          children: [
-            jsx(Input, {
-              className: 'h-7 text-xs',
-              placeholder: 'Filter skills…',
-              value: skillFilter,
-              onChange: event => setSkillFilter(event.target.value)
-            }),
-            jsx(ScrollArea, {
-              style: { maxHeight: 180 },
-              children: jsx(CheckList, {
-                items: visibleSkills,
-                onToggle: toggleSkill,
-                columns: 2
+      import.meta.env.VITE_HERMES_DESKTOP_SKU === 'bot-linux-mini'
+        ? null
+        : labeled(
+            `Skills (${enabledSkills}/${state.skills.length} enabled)`,
+            jsxs('div', {
+              className: 'grid gap-1.5 rounded-xl border border-(--ui-stroke-secondary) p-2',
+              children: [
+                jsx(Input, {
+                  className: 'h-7 text-xs',
+                  placeholder: 'Filter skills…',
+                  value: skillFilter,
+                  onChange: event => setSkillFilter(event.target.value)
+                }),
+                jsx(ScrollArea, {
+                  style: { maxHeight: 180 },
+                  children: jsx(CheckList, {
+                    items: visibleSkills,
+                    onToggle: toggleSkill,
+                    columns: 2
+                  })
+                })
+              ]
+            })
+          ),
+      import.meta.env.VITE_HERMES_DESKTOP_SKU === 'bot-linux-mini'
+        ? null
+        : labeled(
+            `Toolsets (${enabledToolsets}/${state.toolsets.length} enabled — unchecking all restores the default)`,
+            jsx('div', {
+              className: 'rounded-xl border border-(--ui-stroke-secondary) p-2',
+              children: jsx(ScrollArea, {
+                style: { maxHeight: 160 },
+                children: jsx(CheckList, {
+                  items: state.toolsets,
+                  onToggle: toggleToolset,
+                  columns: 2
+                })
               })
             })
-          ]
-        })
-      ),
-      labeled(
-        `Toolsets (${enabledToolsets}/${state.toolsets.length} enabled — unchecking all restores the default)`,
-        jsx('div', {
-          className: 'rounded-xl border border-(--ui-stroke-secondary) p-2',
-          children: jsx(ScrollArea, {
-            style: { maxHeight: 160 },
-            children: jsx(CheckList, {
-              items: state.toolsets,
-              onToggle: toggleToolset,
-              columns: 2
-            })
-          })
-        })
-      ),
+          ),
       labeled(
         'SOUL.md (persona + agent-messaging protocol)',
         jsx(Textarea, {
@@ -3445,11 +3422,11 @@ async function applyAdvancedConfig(bot, state) {
     payload.provider = state.provider.trim()
   }
 
-  if (state.dirtySkills) {
+  if (import.meta.env.VITE_HERMES_DESKTOP_SKU !== 'bot-linux-mini' && state.dirtySkills) {
     payload.disabled_skills = state.skills.filter(s => !s.enabled).map(s => s.name)
   }
 
-  if (state.dirtyToolsets) {
+  if (import.meta.env.VITE_HERMES_DESKTOP_SKU !== 'bot-linux-mini' && state.dirtyToolsets) {
     const all = state.toolsets.length
     const enabled = state.toolsets.filter(t => t.enabled)
     // All enabled (or none) = clear the pin; otherwise pin the checked set.
@@ -3523,9 +3500,7 @@ function EditProfileDialog({ bot, open, onClose, onDelete }) {
     const desc = description.trim()
     if (desc !== (bot.description || '').trim()) {
       try {
-        await host.request('cli.exec', {
-          argv: ['profile', 'describe', bot.name, '--text', desc]
-        })
+        await updateBotDescription(host, bot.name, desc)
         queryClient.invalidateQueries({ queryKey: ROSTER_KEY })
       } catch (err) {
         host.notifyError(err, 'Saved look locally; description update failed')
@@ -3619,7 +3594,9 @@ function EditProfileDialog({ bot, open, onClose, onDelete }) {
                   name: advanced ? 'chevron-down' : 'chevron-right',
                   className: 'text-[0.8rem]'
                 }),
-                'Advanced — model, skills, toolsets, SOUL.md'
+                import.meta.env.VITE_HERMES_DESKTOP_SKU === 'bot-linux-mini'
+                  ? 'Advanced — model and SOUL.md'
+                  : 'Advanced — model, skills, toolsets, SOUL.md'
               ]
             }),
             advanced
@@ -4470,7 +4447,14 @@ function GrokMark({ className, size = 16 }) {
     height: size,
     viewBox: '0 0 24 24',
     width: size,
-    children: [jsx('path', { d: 'M9.26905 15.284L17.2479 9.36086C17.6391 9.07047 18.1981 9.18374 18.3845 9.63478C19.3655 12.0135 18.9272 14.8721 16.9755 16.8349C15.0238 18.7976 12.3082 19.228 9.8261 18.2477L7.1146 19.5102C11.0037 22.1834 15.7263 21.5223 18.6774 18.5525C21.0182 16.1985 21.7432 12.9897 21.0653 10.0961L21.0714 10.1023C20.0884 5.85143 21.3131 4.15233 23.8218 0.677913C23.8812 0.595532 23.9406 0.513151 24 0.428711L20.6987 3.74866V3.73836L9.267 15.2861' }), jsx('path', { d: 'M7.62249 16.7237C4.83113 14.0422 5.3124 9.89222 7.69417 7.49905C9.45541 5.72786 12.341 5.00497 14.86 6.06768L17.5653 4.81138C17.0779 4.45714 16.4533 4.07613 15.7365 3.80839C12.4966 2.46764 8.6178 3.13492 5.98413 5.78141C3.45081 8.32904 2.65415 12.2463 4.02219 15.5889C5.04412 18.0871 3.36889 19.8541 1.68137 21.6377C1.08337 22.2699 0.483318 22.9022 0 23.5716L7.62045 16.7257' })]
+    children: [
+      jsx('path', {
+        d: 'M9.26905 15.284L17.2479 9.36086C17.6391 9.07047 18.1981 9.18374 18.3845 9.63478C19.3655 12.0135 18.9272 14.8721 16.9755 16.8349C15.0238 18.7976 12.3082 19.228 9.8261 18.2477L7.1146 19.5102C11.0037 22.1834 15.7263 21.5223 18.6774 18.5525C21.0182 16.1985 21.7432 12.9897 21.0653 10.0961L21.0714 10.1023C20.0884 5.85143 21.3131 4.15233 23.8218 0.677913C23.8812 0.595532 23.9406 0.513151 24 0.428711L20.6987 3.74866V3.73836L9.267 15.2861'
+      }),
+      jsx('path', {
+        d: 'M7.62249 16.7237C4.83113 14.0422 5.3124 9.89222 7.69417 7.49905C9.45541 5.72786 12.341 5.00497 14.86 6.06768L17.5653 4.81138C17.0779 4.45714 16.4533 4.07613 15.7365 3.80839C12.4966 2.46764 8.6178 3.13492 5.98413 5.78141C3.45081 8.32904 2.65415 12.2463 4.02219 15.5889C5.04412 18.0871 3.36889 19.8541 1.68137 21.6377C1.08337 22.2699 0.483318 22.9022 0 23.5716L7.62045 16.7257'
+      })
+    ]
   })
 }
 
@@ -4481,7 +4465,9 @@ function OpenAiMark({ className, size = 16 }) {
     preserveAspectRatio: 'xMidYMid',
     viewBox: '0 0 256 260',
     width: size,
-    children: jsx('path', { d: 'M239.184 106.203a64.716 64.716 0 0 0-5.576-53.103C219.452 28.459 191 15.784 163.213 21.74A65.586 65.586 0 0 0 52.096 45.22a64.716 64.716 0 0 0-43.23 31.36c-14.31 24.602-11.061 55.634 8.033 76.74a64.665 64.665 0 0 0 5.525 53.102c14.174 24.65 42.644 37.324 70.446 31.36a64.72 64.72 0 0 0 48.754 21.744c28.481.025 53.714-18.361 62.414-45.481a64.767 64.767 0 0 0 43.229-31.36c14.137-24.558 10.875-55.423-8.083-76.483Zm-97.56 136.338a48.397 48.397 0 0 1-31.105-11.255l1.535-.87 51.67-29.825a8.595 8.595 0 0 0 4.247-7.367v-72.85l21.845 12.636c.218.111.37.32.409.563v60.367c-.056 26.818-21.783 48.545-48.601 48.601Zm-104.466-44.61a48.345 48.345 0 0 1-5.781-32.589l1.534.921 51.722 29.826a8.339 8.339 0 0 0 8.441 0l63.181-36.425v25.221a.87.87 0 0 1-.358.665l-52.335 30.184c-23.257 13.398-52.97 5.431-66.404-17.803ZM23.549 85.38a48.499 48.499 0 0 1 25.58-21.333v61.39a8.288 8.288 0 0 0 4.195 7.316l62.874 36.272-21.845 12.636a.819.819 0 0 1-.767 0L41.353 151.53c-23.211-13.454-31.171-43.144-17.804-66.405v.256Zm179.466 41.695-63.08-36.63L161.73 77.86a.819.819 0 0 1 .768 0l52.233 30.184a48.6 48.6 0 0 1-7.316 87.635v-61.391a8.544 8.544 0 0 0-4.4-7.213Zm21.742-32.69-1.535-.922-51.619-30.081a8.39 8.39 0 0 0-8.492 0L99.98 99.808V74.587a.716.716 0 0 1 .307-.665l52.233-30.133a48.652 48.652 0 0 1 72.236 50.391v.205ZM88.061 139.097l-21.845-12.585a.87.87 0 0 1-.41-.614V65.685a48.652 48.652 0 0 1 79.757-37.346l-1.535.87-51.67 29.825a8.595 8.595 0 0 0-4.246 7.367l-.051 72.697Zm11.868-25.58 28.138-16.217 28.188 16.218v32.434l-28.086 16.218-28.188-16.218-.052-32.434Z' })
+    children: jsx('path', {
+      d: 'M239.184 106.203a64.716 64.716 0 0 0-5.576-53.103C219.452 28.459 191 15.784 163.213 21.74A65.586 65.586 0 0 0 52.096 45.22a64.716 64.716 0 0 0-43.23 31.36c-14.31 24.602-11.061 55.634 8.033 76.74a64.665 64.665 0 0 0 5.525 53.102c14.174 24.65 42.644 37.324 70.446 31.36a64.72 64.72 0 0 0 48.754 21.744c28.481.025 53.714-18.361 62.414-45.481a64.767 64.767 0 0 0 43.229-31.36c14.137-24.558 10.875-55.423-8.083-76.483Zm-97.56 136.338a48.397 48.397 0 0 1-31.105-11.255l1.535-.87 51.67-29.825a8.595 8.595 0 0 0 4.247-7.367v-72.85l21.845 12.636c.218.111.37.32.409.563v60.367c-.056 26.818-21.783 48.545-48.601 48.601Zm-104.466-44.61a48.345 48.345 0 0 1-5.781-32.589l1.534.921 51.722 29.826a8.339 8.339 0 0 0 8.441 0l63.181-36.425v25.221a.87.87 0 0 1-.358.665l-52.335 30.184c-23.257 13.398-52.97 5.431-66.404-17.803ZM23.549 85.38a48.499 48.499 0 0 1 25.58-21.333v61.39a8.288 8.288 0 0 0 4.195 7.316l62.874 36.272-21.845 12.636a.819.819 0 0 1-.767 0L41.353 151.53c-23.211-13.454-31.171-43.144-17.804-66.405v.256Zm179.466 41.695-63.08-36.63L161.73 77.86a.819.819 0 0 1 .768 0l52.233 30.184a48.6 48.6 0 0 1-7.316 87.635v-61.391a8.544 8.544 0 0 0-4.4-7.213Zm21.742-32.69-1.535-.922-51.619-30.081a8.39 8.39 0 0 0-8.492 0L99.98 99.808V74.587a.716.716 0 0 1 .307-.665l52.233-30.133a48.652 48.652 0 0 1 72.236 50.391v.205ZM88.061 139.097l-21.845-12.585a.87.87 0 0 1-.41-.614V65.685a48.652 48.652 0 0 1 79.757-37.346l-1.535.87-51.67 29.825a8.595 8.595 0 0 0-4.246 7.367l-.051 72.697Zm11.868-25.58 28.138-16.217 28.188 16.218v32.434l-28.086 16.218-28.188-16.218-.052-32.434Z'
+    })
   })
 }
 
@@ -4826,9 +4812,7 @@ function ProviderSwitch({ variant = 'pill' } = {}) {
               jsx('div', {
                 className: cn(
                   'flex gap-1 p-2',
-                  isRow
-                    ? 'border-b border-(--ui-stroke-secondary)'
-                    : 'flex-col border-r border-(--ui-stroke-secondary)'
+                  isRow ? 'border-b border-(--ui-stroke-secondary)' : 'flex-col border-r border-(--ui-stroke-secondary)'
                 ),
                 children: choices.map(choice =>
                   jsx(
@@ -4878,7 +4862,9 @@ function ProviderSwitch({ variant = 'pill' } = {}) {
                                 saving
                                   ? 'cursor-not-allowed text-(--ui-text-tertiary)'
                                   : 'hover:bg-(--ui-control-active-background)/60',
-                                current?.id === railChoice.id && model === bot.model && 'bg-(--ui-control-active-background)'
+                                current?.id === railChoice.id &&
+                                  model === bot.model &&
+                                  'bg-(--ui-control-active-background)'
                               ),
                               disabled: saving,
                               onClick: () => pick(railChoice, model),
@@ -5000,9 +4986,7 @@ function RecipientHeader() {
   const botMeta = useValue($botMeta)
   const group = activeGroupId ? groups[activeGroupId] : null
   const conversation = draft || group
-  const roster = filterDeletedRoster(
-    Array.isArray(data?.profiles) ? data.profiles : $lastRoster.get()
-  )
+  const roster = filterDeletedRoster(Array.isArray(data?.profiles) ? data.profiles : $lastRoster.get())
   const participantIds = conversation?.participantIds || []
 
   useEffect(() => {
@@ -5240,40 +5224,40 @@ function RecipientHeader() {
               children: jsx('div', {
                 className: 'flex h-full items-center',
                 children: jsx('input', {
-              ref: inputRef,
-              value: query,
-              disabled: creating,
-              className:
-                'h-6 w-full min-w-0 bg-transparent px-1 text-[10px] text-foreground outline-none placeholder:text-(--ui-text-quaternary)',
-              placeholder: participantIds.length ? 'Add or create another Bot' : 'Search or create Bots',
-              'aria-label': 'Search or create Bots',
-              onFocus: () => setPickerOpen(true),
-              onBlur: () => window.setTimeout(() => setPickerOpen(false), 120),
-              onChange: event => {
-                setQuery(event.target.value)
-                setCursor(event.target.value.trim() ? 0 : 1)
-                setPickerOpen(true)
-              },
-              onKeyDown: event => {
-                if (event.key === 'ArrowDown') {
-                  event.preventDefault()
-                  setCursor(value => Math.min(options.length - 1, value + 1))
-                } else if (event.key === 'ArrowUp') {
-                  event.preventDefault()
-                  setCursor(value => Math.max(0, value - 1))
-                } else if (event.key === 'Enter' || event.key === 'Tab') {
-                  event.preventDefault()
-                  void choose(selected)
-                } else if (event.key === 'Escape') {
-                  event.preventDefault()
-                  if (pickerOpen) {
-                    setPickerOpen(false)
-                  } else if (draft) {
-                    void closeNewConversation()
+                  ref: inputRef,
+                  value: query,
+                  disabled: creating,
+                  className:
+                    'h-6 w-full min-w-0 bg-transparent px-1 text-[10px] text-foreground outline-none placeholder:text-(--ui-text-quaternary)',
+                  placeholder: participantIds.length ? 'Add or create another Bot' : 'Search or create Bots',
+                  'aria-label': 'Search or create Bots',
+                  onFocus: () => setPickerOpen(true),
+                  onBlur: () => window.setTimeout(() => setPickerOpen(false), 120),
+                  onChange: event => {
+                    setQuery(event.target.value)
+                    setCursor(event.target.value.trim() ? 0 : 1)
+                    setPickerOpen(true)
+                  },
+                  onKeyDown: event => {
+                    if (event.key === 'ArrowDown') {
+                      event.preventDefault()
+                      setCursor(value => Math.min(options.length - 1, value + 1))
+                    } else if (event.key === 'ArrowUp') {
+                      event.preventDefault()
+                      setCursor(value => Math.max(0, value - 1))
+                    } else if (event.key === 'Enter' || event.key === 'Tab') {
+                      event.preventDefault()
+                      void choose(selected)
+                    } else if (event.key === 'Escape') {
+                      event.preventDefault()
+                      if (pickerOpen) {
+                        setPickerOpen(false)
+                      } else if (draft) {
+                        void closeNewConversation()
+                      }
+                    }
                   }
-                }
-              }
-            }),
+                })
               })
             })
           }),
@@ -5285,83 +5269,81 @@ function RecipientHeader() {
             onOpenAutoFocus: event => event.preventDefault(),
             className:
               'z-[100] w-[min(22rem,calc(100vw-2rem))] rounded-xl border border-(--ui-stroke-secondary) bg-(--ui-panel-background) p-1 shadow-nous backdrop-blur-xl',
-                  role: 'listbox',
-                  'aria-label': 'Recipients',
-                  children: jsxs('div', {
-                    children: [
-                      ...options.map((option, index) =>
-                    jsxs(
-                      'button',
-                      {
-                        type: 'button',
-                        role: 'option',
-                        'aria-selected': index === cursor,
-                        className: cn(
-                          'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs',
-                          index === cursor ? 'bg-(--ui-control-active-background)' : 'hover:bg-(--chrome-action-hover)'
-                        ),
-                        onMouseDown: event => event.preventDefault(),
-                        onMouseEnter: () => setCursor(index),
-                        onClick: () => void choose(option),
-                        children: [
-                          option.kind === 'create'
-                            ? jsx('span', {
-                                className:
-                                  'grid size-5 shrink-0 place-items-center rounded-full bg-(--ui-control-active-background)',
-                                children: creating
-                                  ? jsx(GlyphSpinner, { spinner: 'breathe' })
-                                  : jsx(Codicon, {
-                                      name: 'add',
-                                      size: '0.65rem'
-                                    })
-                              })
-                            : jsx(BotFace, {
-                                ...botAppearance(option.bot.name, botMeta[option.bot.name]),
-                                name: option.bot.name,
-                                size: 20,
-                                mood: 'idle'
-                              }),
-                          jsx('span', {
-                            className: 'min-w-0 flex-1 truncate',
-                            children: option.label
-                          }),
-                        ]
-                      },
-                      option.key
-                    )
-                  ),
-                      // The key legend Grok Bot keeps in the picker's corner:
-                      // Tab adds a recipient and keeps composing, Enter opens.
-                      jsxs('div', {
-                        className:
-                          'mt-1 flex items-center justify-end gap-2 border-t border-(--ui-stroke-secondary) px-2 pb-0.5 pt-1.5 text-[0.62rem] text-(--ui-text-tertiary)',
-                        children: [
-                          jsxs('span', {
-                            className: 'flex items-center gap-1',
-                            children: [
-                              jsx('kbd', {
-                                className:
-                                  'rounded bg-(--ui-control-active-background) px-1 py-px font-sans text-[0.6rem]',
-                                children: 'Tab'
-                              }),
-                              'add'
-                            ]
-                          }),
-                          jsxs('span', {
-                            className: 'flex items-center gap-1',
-                            children: [
-                              jsx('kbd', {
-                                className:
-                                  'rounded bg-(--ui-control-active-background) px-1 py-px font-sans text-[0.6rem]',
-                                children: '⏎'
-                              }),
-                              'open'
-                            ]
-                          })
-                        ]
-                      })
-                    ]
-                  })
+            role: 'listbox',
+            'aria-label': 'Recipients',
+            children: jsxs('div', {
+              children: [
+                ...options.map((option, index) =>
+                  jsxs(
+                    'button',
+                    {
+                      type: 'button',
+                      role: 'option',
+                      'aria-selected': index === cursor,
+                      className: cn(
+                        'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs',
+                        index === cursor ? 'bg-(--ui-control-active-background)' : 'hover:bg-(--chrome-action-hover)'
+                      ),
+                      onMouseDown: event => event.preventDefault(),
+                      onMouseEnter: () => setCursor(index),
+                      onClick: () => void choose(option),
+                      children: [
+                        option.kind === 'create'
+                          ? jsx('span', {
+                              className:
+                                'grid size-5 shrink-0 place-items-center rounded-full bg-(--ui-control-active-background)',
+                              children: creating
+                                ? jsx(GlyphSpinner, { spinner: 'breathe' })
+                                : jsx(Codicon, {
+                                    name: 'add',
+                                    size: '0.65rem'
+                                  })
+                            })
+                          : jsx(BotFace, {
+                              ...botAppearance(option.bot.name, botMeta[option.bot.name]),
+                              name: option.bot.name,
+                              size: 20,
+                              mood: 'idle'
+                            }),
+                        jsx('span', {
+                          className: 'min-w-0 flex-1 truncate',
+                          children: option.label
+                        })
+                      ]
+                    },
+                    option.key
+                  )
+                ),
+                // The key legend Grok Bot keeps in the picker's corner:
+                // Tab adds a recipient and keeps composing, Enter opens.
+                jsxs('div', {
+                  className:
+                    'mt-1 flex items-center justify-end gap-2 border-t border-(--ui-stroke-secondary) px-2 pb-0.5 pt-1.5 text-[0.62rem] text-(--ui-text-tertiary)',
+                  children: [
+                    jsxs('span', {
+                      className: 'flex items-center gap-1',
+                      children: [
+                        jsx('kbd', {
+                          className: 'rounded bg-(--ui-control-active-background) px-1 py-px font-sans text-[0.6rem]',
+                          children: 'Tab'
+                        }),
+                        'add'
+                      ]
+                    }),
+                    jsxs('span', {
+                      className: 'flex items-center gap-1',
+                      children: [
+                        jsx('kbd', {
+                          className: 'rounded bg-(--ui-control-active-background) px-1 py-px font-sans text-[0.6rem]',
+                          children: '⏎'
+                        }),
+                        'open'
+                      ]
+                    })
+                  ]
+                })
+              ]
+            })
           })
         ]
       }),
@@ -5451,75 +5433,75 @@ function PinnedStrip({ bots, onEdit, onDelete }) {
           className: 'min-w-0 shrink-0 overflow-hidden',
           style: { width: '80px' },
           children: jsxs(ContextMenu, {
-          children: [
-            jsx(ContextMenuTrigger, {
-              asChild: true,
-              children: jsxs('button', {
-                // min-w-0 here as well: w-full still yields to min-width:auto,
-                // so without it the button balloons OUT of its 80px wrapper to
-                // the chip text's nowrap width and drags the avatar with it.
-                className: cn(
-                  'group flex w-full min-w-0 flex-col items-center gap-1.5 overflow-hidden rounded-2xl px-2 py-2 transition-colors',
-                  isActive && 'bg-(--ui-control-active-background) ring-1 ring-inset ring-(--ui-stroke-secondary)'
-                ),
-                style: { borderRadius: '18px' },
-                draggable: true,
-                onDragStart: event => startBotDrag(event, bot.name),
-                onDragEnd: finishBotDrag,
-                onDragOver: event => {
-                  event.preventDefault()
-                  event.stopPropagation()
-                },
-                onDrop: event => {
-                  event.preventDefault()
-                  event.stopPropagation()
-                  const name = readDraggedBot(event)
+            children: [
+              jsx(ContextMenuTrigger, {
+                asChild: true,
+                children: jsxs('button', {
+                  // min-w-0 here as well: w-full still yields to min-width:auto,
+                  // so without it the button balloons OUT of its 80px wrapper to
+                  // the chip text's nowrap width and drags the avatar with it.
+                  className: cn(
+                    'group flex w-full min-w-0 flex-col items-center gap-1.5 overflow-hidden rounded-2xl px-2 py-2 transition-colors',
+                    isActive && 'bg-(--ui-control-active-background) ring-1 ring-inset ring-(--ui-stroke-secondary)'
+                  ),
+                  style: { borderRadius: '18px' },
+                  draggable: true,
+                  onDragStart: event => startBotDrag(event, bot.name),
+                  onDragEnd: finishBotDrag,
+                  onDragOver: event => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                  },
+                  onDrop: event => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    const name = readDraggedBot(event)
 
-                  if (name && name !== bot.name) {
-                    movePinnedBot(name, bot.name)
-                  }
+                    if (name && name !== bot.name) {
+                      movePinnedBot(name, bot.name)
+                    }
 
-                  setDropActive(false)
-                  finishBotDrag()
-                },
-                onClick: () => void openBotChat(bot),
-                title: role ? `${label} — ${role}` : label,
-                type: 'button',
+                    setDropActive(false)
+                    finishBotDrag()
+                  },
+                  onClick: () => void openBotChat(bot),
+                  title: role ? `${label} — ${role}` : label,
+                  type: 'button',
+                  children: [
+                    jsx('span', {
+                      className: 'transition-transform group-hover:scale-[1.04]',
+                      children: jsx(BotFace, { color, image, mood: 'idle', name: bot.name, shape, size: 56 })
+                    }),
+                    jsx('span', {
+                      className: 'w-full truncate text-center text-[0.72rem] font-medium',
+                      children: label
+                    }),
+                    role
+                      ? jsx('span', {
+                          className: cn(
+                            'w-full truncate rounded-lg bg-(--ui-control-active-background) px-1.5 py-0.5',
+                            'text-center text-[0.62rem] text-(--ui-text-tertiary)'
+                          ),
+                          children: role
+                        })
+                      : null
+                  ]
+                })
+              }),
+              jsxs(ContextMenuContent, {
                 children: [
-                  jsx('span', {
-                    className: 'transition-transform group-hover:scale-[1.04]',
-                    children: jsx(BotFace, { color, image, mood: 'idle', name: bot.name, shape, size: 56 })
+                  jsx(ContextMenuItem, {
+                    onSelect: () => toggleBotPin(bot.name),
+                    children: 'Unpin from top'
                   }),
-                  jsx('span', {
-                    className: 'w-full truncate text-center text-[0.72rem] font-medium',
-                    children: label
+                  jsx(ContextMenuItem, {
+                    onSelect: () => onEdit(bot),
+                    children: 'Edit Profile'
                   }),
-                  role
-                    ? jsx('span', {
-                        className: cn(
-                          'w-full truncate rounded-lg bg-(--ui-control-active-background) px-1.5 py-0.5',
-                          'text-center text-[0.62rem] text-(--ui-text-tertiary)'
-                        ),
-                        children: role
-                      })
-                    : null
+                  ...deleteMenuItems(bot, onDelete)
                 ]
               })
-            }),
-            jsxs(ContextMenuContent, {
-              children: [
-                jsx(ContextMenuItem, {
-                  onSelect: () => toggleBotPin(bot.name),
-                  children: 'Unpin from top'
-                }),
-                jsx(ContextMenuItem, {
-                  onSelect: () => onEdit(bot),
-                  children: 'Edit Profile'
-                }),
-                ...deleteMenuItems(bot, onDelete)
-              ]
-            })
-          ]
+            ]
           })
         },
         bot.name
@@ -5728,8 +5710,7 @@ function BotsPane() {
       jsx('div', {
         className: 'px-2.5 pb-2.5 pt-1',
         children: jsxs('label', {
-          className:
-            'flex h-8 min-w-0 w-full items-center gap-1.5 border px-2.5 text-(--ui-text-quaternary)',
+          className: 'flex h-8 min-w-0 w-full items-center gap-1.5 border px-2.5 text-(--ui-text-quaternary)',
           style: {
             backgroundColor: 'rgba(255,255,255,0.07)',
             borderColor: 'rgba(255,255,255,0.10)',
@@ -6241,14 +6222,9 @@ export default {
 
       const activeRuntime = host.state.activeSessionId?.get?.()
       const explicitNew = pendingExplicitNewSession
-      const eventProfile =
-        String(event.profile || event?.payload?.profile_name || '').trim() || explicitNew?.name
+      const eventProfile = String(event.profile || event?.payload?.profile_name || '').trim() || explicitNew?.name
 
-      if (
-        explicitNew &&
-        eventProfile === explicitNew.name &&
-        storedId !== explicitNew.previousChat
-      ) {
+      if (explicitNew && eventProfile === explicitNew.name && storedId !== explicitNew.previousChat) {
         if (explicitNew.groupId) {
           patchBotGroup(explicitNew.groupId, {
             sessionId: storedId,
@@ -6332,9 +6308,7 @@ export default {
       }
 
       if (binding.action !== 'bind' && binding.action !== 'keep') {
-        const foregroundBot = String(
-          lastMessengerBot || $selectedBot.get() || host.state.profile.get() || ''
-        ).trim()
+        const foregroundBot = String(lastMessengerBot || $selectedBot.get() || host.state.profile.get() || '').trim()
         const canonical = resolveCanonicalSessionBinding({
           storedId,
           runtimeId,

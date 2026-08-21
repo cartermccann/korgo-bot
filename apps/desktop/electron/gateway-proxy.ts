@@ -44,6 +44,7 @@ export interface GatewayProxyOptions {
   ipc: IpcRegistrar
   resolveUrl: (profile: null | string) => Promise<string>
   sshOnly?: boolean
+  linuxMini?: boolean
 }
 
 function normalizedProfile(profile: unknown): null | string {
@@ -257,7 +258,7 @@ export function registerGatewayProxy(options: GatewayProxyOptions): { disposeOwn
 
     if (options.sshOnly) {
       try {
-        assertSshOnlyGatewayProxyDataAllowed(entry.purpose, raw?.data)
+        assertSshOnlyGatewayProxyDataAllowed(entry.purpose, raw?.data, options.linuxMini)
       } catch {
         emit(entry, { id, type: 'error' })
         closeEntry(key, 1008, 'gateway operation denied')

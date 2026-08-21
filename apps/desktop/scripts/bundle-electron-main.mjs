@@ -14,10 +14,11 @@ import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { mkdirSync } from 'node:fs'
 
+import { validateDesktopBuildEnvironment } from './desktop-sku.mjs'
+
 const here = dirname(fileURLToPath(import.meta.url))
 const root = resolve(here, '..')
 const distDir = resolve(root, 'dist')
-mkdirSync(distDir, { recursive: true })
 
 const mainEntry = resolve(root, 'electron/main.ts')
 const mainOut = resolve(distDir, 'electron-main.mjs')
@@ -29,45 +30,56 @@ const external = ['electron', 'node-pty', 'get-windows', 'fs']
 // behaves like a packaged build. Dev bundles (`--dev`) leave the env alone
 // so HERMES_DESKTOP_DEV_SERVER / source-tree resolution keep working.
 const isDev = process.argv.includes('--dev')
-const sku =
-  process.env.HERMES_DESKTOP_SKU === 'bot-ssh-only'
-    ? 'bot-ssh-only'
-    : process.env.HERMES_DESKTOP_SKU === 'bot' || process.env.HERMES_DESKTOP_PRODUCT === 'bot'
-      ? 'bot'
-      : 'hermes'
+const sku = validateDesktopBuildEnvironment(process.env, { requireAligned: true })
+mkdirSync(distDir, { recursive: true })
+const strictSsh = sku === 'bot-linux-mini' || sku === 'bot-ssh-only'
 const linkTitleIntegration = resolve(
   root,
-  sku === 'bot-ssh-only' ? 'electron/link-title-integration.disabled.ts' : 'electron/link-title-integration.full.ts'
+  strictSsh ? 'electron/link-title-integration.disabled.ts' : 'electron/link-title-integration.full.ts'
 )
 const preloadSkuIntegration = resolve(
   root,
-  sku === 'bot-ssh-only' ? 'electron/sku-integrations.preload.disabled.ts' : 'electron/sku-integrations.preload.full.ts'
+  sku === 'bot-linux-mini'
+    ? 'electron/sku-integrations.preload.mini.ts'
+    : strictSsh
+      ? 'electron/sku-integrations.preload.disabled.ts'
+      : 'electron/sku-integrations.preload.full.ts'
 )
 const preloadHostToolsIntegration = resolve(
   root,
-  sku === 'bot-ssh-only'
+  strictSsh
     ? 'electron/sku-integrations.host-tools.preload.disabled.ts'
     : 'electron/sku-integrations.host-tools.preload.full.ts'
 )
 const nodePtyIntegration = resolve(
   root,
-  sku === 'bot-ssh-only'
-    ? 'electron/sku-integrations.node-pty.disabled.ts'
-    : 'electron/sku-integrations.node-pty.full.ts'
+  strictSsh ? 'electron/sku-integrations.node-pty.disabled.ts' : 'electron/sku-integrations.node-pty.full.ts'
 )
 const mainSkuIntegration = resolve(
   root,
-  sku === 'bot-ssh-only' ? 'electron/sku-integrations.disabled.ts' : 'electron/sku-integrations.full.ts'
+  strictSsh ? 'electron/sku-integrations.disabled.ts' : 'electron/sku-integrations.full.ts'
 )
 const windowsSandboxIntegration = resolve(
   root,
-  sku === 'bot-ssh-only'
+  strictSsh
     ? 'electron/sku-integrations.windows-sandbox.disabled.ts'
     : 'electron/sku-integrations.windows-sandbox.full.ts'
 )
 const ipcChannelPolicy = resolve(
   root,
-  sku === 'bot-ssh-only' ? 'electron/ipc-channel-policy.ssh-only.ts' : 'electron/ipc-channel-policy.ts'
+  sku === 'bot-linux-mini'
+    ? 'electron/ipc-channel-policy.mini.ts'
+    : strictSsh
+      ? 'electron/ipc-channel-policy.ssh-only.ts'
+      : 'electron/ipc-channel-policy.ts'
+)
+const miniDesktopProxy = resolve(
+  root,
+  sku === 'bot-linux-mini' ? 'electron/mini-desktop-proxy.ts' : 'electron/mini-desktop-proxy.disabled.ts'
+)
+const miniRuntimeContract = resolve(
+  root,
+  sku === 'bot-linux-mini' ? 'electron/mini-runtime-contract.ts' : 'electron/mini-runtime-contract.disabled.ts'
 )
 const bootstrapIntegration = resolve(root, 'electron/sku-integrations.bootstrap.disabled.ts')
 const orgoBrokerIntegration = resolve(root, 'electron/sku-integrations.orgo-broker.disabled.ts')
@@ -85,7 +97,9 @@ const skuIntegrationAliases = {
   './sku-integrations': mainSkuIntegration,
   './sku-integrations.windows-sandbox': windowsSandboxIntegration,
   './ipc-channel-policy': ipcChannelPolicy,
-  ...(sku === 'bot-ssh-only'
+  './mini-desktop-proxy': miniDesktopProxy,
+  './mini-runtime-contract': miniRuntimeContract,
+  ...(strictSsh
     ? {
         './bootstrap-runner': bootstrapIntegration,
         './orgo-broker': orgoBrokerIntegration,
@@ -122,7 +136,13 @@ const skuIntegrationPlugin = {
     build.onResolve({ filter: /^\.\/ipc-channel-policy$/ }, args => ({
       path: skuIntegrationAliases[args.path]
     }))
-    if (sku === 'bot-ssh-only') {
+    build.onResolve({ filter: /^\.\/mini-desktop-proxy$/ }, args => ({
+      path: skuIntegrationAliases[args.path]
+    }))
+    build.onResolve({ filter: /^\.\/mini-runtime-contract$/ }, args => ({
+      path: skuIntegrationAliases[args.path]
+    }))
+    if (strictSsh) {
       build.onResolve({ filter: /^\.\/bootstrap-runner$/ }, args => ({ path: skuIntegrationAliases[args.path] }))
       build.onResolve({ filter: /^\.\/orgo-broker$/ }, args => ({ path: skuIntegrationAliases[args.path] }))
       build.onResolve({ filter: /^\.\/orgo-desktop$/ }, args => ({ path: skuIntegrationAliases[args.path] }))
@@ -135,8 +155,9 @@ const skuIntegrationPlugin = {
   }
 }
 const define = isDev
-  ? {}
+  ? { STRICT_SSH_SKU: JSON.stringify(strictSsh) }
   : {
+      STRICT_SSH_SKU: JSON.stringify(strictSsh),
       'process.env.HERMES_DESKTOP_IS_PACKAGED': JSON.stringify(true),
       'process.env.HERMES_DESKTOP_SKU': JSON.stringify(sku),
       'process.env.HERMES_DESKTOP_PRODUCT': JSON.stringify(sku === 'hermes' ? 'hermes' : 'bot')

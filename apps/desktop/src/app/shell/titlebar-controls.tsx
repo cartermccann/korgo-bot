@@ -113,7 +113,7 @@ export function TitlebarControls({ leftTools = [], tools = [], onOpenSettings }:
   const fileBrowserOpen = useStore($fileBrowserOpen)
   const orgoDesktopOpen = useStore($orgoDesktopOpen)
   const sidebarOpen = useStore($sidebarOpen)
-  const orgoDesktopAllowed = allowsDesktopCapability('allowOrgo')
+  const orgoDesktopAllowed = allowsDesktopCapability('allowComputerSurface')
 
   const toggleHaptics = () => {
     if (!hapticsMuted) {
@@ -136,7 +136,8 @@ export function TitlebarControls({ leftTools = [], tools = [], onOpenSettings }:
   const rightEdge = { open: fileBrowserOpen, toggle: toggleFileBrowserOpen }
 
   const leftToolbarTools: TitlebarTool[] = [
-    ...(import.meta.env.VITE_HERMES_DESKTOP_SKU === 'bot-ssh-only'
+    ...(import.meta.env.VITE_HERMES_DESKTOP_SKU === 'bot-linux-mini' ||
+    import.meta.env.VITE_HERMES_DESKTOP_SKU === 'bot-ssh-only'
       ? []
       : [
           {
@@ -166,6 +167,7 @@ export function TitlebarControls({ leftTools = [], tools = [], onOpenSettings }:
   ]
 
   const rightSidebarTool: TitlebarTool | null =
+    import.meta.env.VITE_HERMES_DESKTOP_SKU === 'bot-linux-mini' ||
     import.meta.env.VITE_HERMES_DESKTOP_SKU === 'bot-ssh-only'
       ? null
       : {
@@ -182,7 +184,8 @@ export function TitlebarControls({ leftTools = [], tools = [], onOpenSettings }:
 
   // Static system tools — always pinned to the screen's right edge.
   const systemTools: TitlebarTool[] = [
-    ...(import.meta.env.VITE_HERMES_DESKTOP_SKU === 'bot-ssh-only'
+    ...(import.meta.env.VITE_HERMES_DESKTOP_SKU === 'bot-linux-mini' ||
+    import.meta.env.VITE_HERMES_DESKTOP_SKU === 'bot-ssh-only'
       ? []
       : [
           {

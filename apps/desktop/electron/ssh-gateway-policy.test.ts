@@ -63,6 +63,72 @@ test('SSH gateway policy rejects direct Mini configuration and host-impacting me
   }
 })
 
+test('Linux Mini gateway policy permits only the exact credential-free Bot and routine operations', () => {
+  const allowed = [
+    request('profiles.list'),
+    request('profiles.list', { include_sessions: false }),
+    request('session.list', { limit: 50, profile: 'default' }),
+    request('profiles.describe', { name: 'work' }),
+    request('profiles.create', {
+      clone_from: null,
+      description: 'Research bot',
+      inherit: 'none',
+      name: 'research'
+    }),
+    request('profiles.configure', {
+      description: 'Updated',
+      name: 'research',
+      ui_meta: { 'hermes-bots': { color: '#3366ff', shape: 'circle', title: 'Research' } }
+    }),
+    request('profiles.set_asset', {
+      asset: 'avatar',
+      data: 'data:image/png;base64,AA==',
+      name: 'research'
+    }),
+    request('profiles.delete', { name: 'research' }),
+    request('cron.manage', { action: 'list', include_disabled: true }),
+    request('cron.manage', {
+      action: 'add',
+      name: 'daily-review',
+      prompt: 'Review the shared workspace.',
+      repeat: 10,
+      schedule: '0 9 * * *'
+    }),
+    request('cron.manage', { action: 'pause', name: 'daily-review' })
+  ]
+
+  for (const frame of allowed) {
+    assert.throws(() => assertSshOnlyGatewayProxyDataAllowed('gateway', frame), /unavailable/, frame)
+    assert.doesNotThrow(() => assertSshOnlyGatewayProxyDataAllowed('gateway', frame, true), frame)
+  }
+})
+
+test('Linux Mini gateway policy rejects credential inheritance, broad commands, and malformed Bot params', () => {
+  const denied = [
+    request('profiles.create', { inherit: 'mirror', name: 'research' }),
+    request('profiles.create', { inherit: 'none', mirror_credentials: true, name: 'research' }),
+    request('profiles.create', { inherit: 'none', name: '../../root' }),
+    request('profiles.delete', { name: 'default' }),
+    request('profiles.configure', { api_key: 'secret', name: 'research' }),
+    request('profiles.configure', { name: 'research', ui_meta: { unexpected: true } }),
+    request('profiles.configure', { disabled_skills: ['browser'], name: 'research' }),
+    request('profiles.configure', { enabled_toolsets: ['dangerous'], name: 'research' }),
+    request('profiles.configure', { name: 'research', ui_meta: { 'hermes-bots': { image: 'secret' } } }),
+    request('profiles.configure', { name: 'research', ui_meta: { 'hermes-bots': { color: 'blue' } } }),
+    request('profiles.set_asset', { asset: '../SOUL.md', data: 'x', name: 'research' }),
+    request('session.list', { limit: 10_000, profile: 'default' }),
+    request('cron.manage', { action: 'add', env: {}, name: 'job', prompt: 'x', schedule: '* * * * *' }),
+    request('cron.manage', { action: 'remove', name: '' }),
+    request('cli.exec', { command: 'rm -rf /' }),
+    request('image.generate', { prompt: 'avatar' }),
+    request('pet.gallery')
+  ]
+
+  for (const frame of denied) {
+    assert.throws(() => assertSshOnlyGatewayProxyDataAllowed('gateway', frame, true), /unavailable/, frame)
+  }
+})
+
 test('SSH gateway policy rejects credential-shaped, malformed, binary, and over-broad safe-method params', () => {
   const denied = [
     request('config.get', { key: 'approvals.mode' }),

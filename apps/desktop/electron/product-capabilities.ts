@@ -10,6 +10,7 @@ import {
 export const FULL_DESKTOP_POLICY: DesktopProductPolicy = Object.freeze({
   allowLocalRuntime: true,
   allowBootstrap: true,
+  allowComputerSurface: true,
   allowOrgo: true,
   allowComposio: true,
   allowLocalCredentialEntry: true,
@@ -19,7 +20,16 @@ export const FULL_DESKTOP_POLICY: DesktopProductPolicy = Object.freeze({
   allowedConnectionModes: Object.freeze([...DESKTOP_CONNECTION_MODES])
 })
 
+export const LINUX_MINI_POLICY: DesktopProductPolicy = Object.freeze({
+  ...SSH_ONLY_POLICY,
+  allowComputerSurface: true
+})
+
 export function desktopCapabilitiesForSku(sku: DesktopSku): DesktopProductPolicy {
+  if (sku === 'bot-linux-mini') {
+    return LINUX_MINI_POLICY
+  }
+
   return sku === 'bot-ssh-only' ? SSH_ONLY_POLICY : FULL_DESKTOP_POLICY
 }
 

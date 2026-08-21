@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Sandboxed Hermes launcher and runit control surface for the Void Mini.
+
+set -euo pipefail
+
+COMMON="${KORGO_MINI_COMMON:-/usr/local/libexec/korgo-mini/korgo-mini-common}"
+[[ -r "$COMMON" ]] || { printf 'hermes-korgo: missing runtime library: %s\n' "$COMMON" >&2; exit 1; }
+# shellcheck disable=SC1090
+source "$COMMON"
+
+print_help() {
+  cat <<'EOF'
+Usage:
+  hermes-korgo start|status|stop|ensure
+  hermes-korgo desktop-contract
+  hermes-korgo wrapper-help
+  hermes-korgo [Hermes arguments...]
+
+Normal Hermes arguments are passed through a fail-closed bubblewrap boundary.
+Set this executable as Korgo's remote Hermes path. Service-control commands
+manage the persistent `hermes gateway run` runit service and require root except
+for status. The Desktop-owned `serve --isolated` process remains client-owned.
+EOF
+}
+
+case "${1:-}" in
+  ''|wrapper-help)
+    print_help
+    exit 0
+    ;;
+esac
+
+korgo_load_config
+
+case "$1" in
+  desktop-contract)
+    printf 'lock_dir=%s\n' "$KORGO_DESKTOP_LOCK_DIR"
+    printf 'hermes_home=/state/hermes\n'
+    ;;
+  start|ensure)
+    korgo_assert_stage_layout
+    korgo_assert_no_direct_stage_conflict
+    korgo_control_service hermes-korgo "$1"
+    ;;
+  status)
+    conflicts="$(korgo_direct_stage_conflicts)"
+    if [[ -n "$conflicts" ]]; then
+      printf 'conflict: unsandboxed staged Hermes pid(s): %s\n' "${conflicts//$'\n'/,}"
+      exit 2
+    fi
+    korgo_control_service hermes-korgo status
+    ;;
+  stop)
+    korgo_control_service hermes-korgo stop
+    ;;
+  gateway-foreground)
+    korgo_require_runtime_user
+    korgo_assert_stage_layout
+    korgo_assert_no_direct_stage_conflict
+    korgo_exec_hermes_sandbox yes gateway run
+    ;;
+  *)
+    korgo_require_runtime_user
+    korgo_assert_stage_layout
+    korgo_assert_no_direct_stage_conflict
+    korgo_exec_hermes_sandbox no "$@"
+    ;;
+esac

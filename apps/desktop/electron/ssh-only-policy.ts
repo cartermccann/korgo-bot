@@ -5,6 +5,7 @@ export type DesktopConnectionMode = (typeof DESKTOP_CONNECTION_MODES)[number]
 export const SSH_ONLY_CAPABILITY_NAMES = [
   'allowLocalRuntime',
   'allowBootstrap',
+  'allowComputerSurface',
   'allowOrgo',
   'allowComposio',
   'allowLocalCredentialEntry',
@@ -33,6 +34,7 @@ export const SSH_ONLY_HOST_KEY_POLICY = Object.freeze({
 export const SSH_ONLY_POLICY: DesktopProductPolicy = Object.freeze({
   allowLocalRuntime: false,
   allowBootstrap: false,
+  allowComputerSurface: false,
   allowOrgo: false,
   allowComposio: false,
   allowLocalCredentialEntry: false,

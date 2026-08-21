@@ -116,7 +116,7 @@ const renderWorkspacePane = () => <WiredPane part="chatRoutes" />
 // Boot-hidden panes mount behind display:none (instant-toggle contract) — defer
 // them to idle so they're off the first-paint path, warm before reveal.
 const idle = (node: ReactElement) => <IdleMount>{node}</IdleMount>
-const ORGO_DESKTOP_ALLOWED = allowsDesktopCapability('allowOrgo')
+const COMPUTER_SURFACE_ALLOWED = allowsDesktopCapability('allowComputerSurface')
 const CONNECTORS_ALLOWED = allowsDesktopCapability('allowComposio')
 // The main tab carries the same session context menu as tile tabs (targets
 // the loaded primary session; no menu on a fresh draft).
@@ -456,7 +456,10 @@ bindTreeSideVisibility('right', $fileBrowserOpen, setFileBrowserOpen)
 // collapse and the chat absorbs the width; picking a project brings them
 // back. The terminal is NOT workspace-gated: unlike the old shell (where it
 // rode the rail's row and vanished with it), its zone stands on its own.
-if (import.meta.env.VITE_HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
+if (
+  import.meta.env.VITE_HERMES_DESKTOP_SKU !== 'bot-linux-mini' &&
+  import.meta.env.VITE_HERMES_DESKTOP_SKU !== 'bot-ssh-only'
+) {
   const $hasWorkspace = computed($currentCwd, cwd => Boolean(cwd.trim()))
 
   // The tree pane's own presence tracks ⌘J directly, not just the column's
@@ -581,7 +584,7 @@ if (import.meta.env.VITE_HERMES_DESKTOP_SKU !== 'bot-ssh-only') {
   // Computer details are fixed app chrome, not a tile. ContribController mounts
   // the rail outside the layout tree so terminals, previews, and persisted user
   // layouts can never add a tab strip or steal part of its height.
-  if (ORGO_DESKTOP_ALLOWED) {
+  if (COMPUTER_SURFACE_ALLOWED) {
     registry.register(
       paletteToggle({
         id: 'computer.toggle',
@@ -748,7 +751,7 @@ export function ContribController() {
 
             <div className="flex min-h-0 min-w-0 flex-1">
               <LayoutTreeRoot />
-              {ORGO_DESKTOP_ALLOWED && orgoDesktopOpen ? (
+              {COMPUTER_SURFACE_ALLOWED && orgoDesktopOpen ? (
                 <ResizableComputerRail>
                   <OrgoDesktopPane />
                 </ResizableComputerRail>

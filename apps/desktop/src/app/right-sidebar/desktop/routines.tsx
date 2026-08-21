@@ -148,7 +148,9 @@ export function AgentRoutines({ activeProfile, onEdit }: AgentRoutinesProps) {
                 {active ? <Clock aria-hidden className="size-3.5" /> : <Pause aria-hidden className="size-3.5" />}
               </span>
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-[0.72rem] font-medium text-(--ui-text-primary)">{jobTitle(job)}</span>
+                <span className="block truncate text-[0.72rem] font-medium text-(--ui-text-primary)">
+                  {jobTitle(job)}
+                </span>
                 <span className="mt-0.5 block truncate text-[0.64rem] text-(--ui-text-quaternary)">
                   {Number.isNaN(nextRun) ? scheduleLabel(job) : relativeTime(nextRun)}
                 </span>
@@ -169,9 +171,7 @@ interface RoutineEditorProps {
 export function RoutineEditor({ job, onClose }: RoutineEditorProps) {
   const initialSchedule = job ? scheduleExpression(job) : SCHEDULES[1].value
 
-  const initialPreset = SCHEDULES.some(option => option.value === initialSchedule)
-    ? initialSchedule
-    : CUSTOM_SCHEDULE
+  const initialPreset = SCHEDULES.some(option => option.value === initialSchedule) ? initialSchedule : CUSTOM_SCHEDULE
 
   const [name, setName] = useState(job?.name || '')
   const [prompt, setPrompt] = useState(job?.prompt || '')
@@ -209,7 +209,7 @@ export function RoutineEditor({ job, onClose }: RoutineEditorProps) {
   }, [job])
 
   const save = async () => {
-    if (!prompt.trim() || !schedule) {
+    if (!name.trim() || !prompt.trim() || !schedule) {
       return
     }
 
@@ -274,16 +274,16 @@ export function RoutineEditor({ job, onClose }: RoutineEditorProps) {
         <div className="flex h-11 shrink-0 items-center justify-between border-b border-(--ui-stroke-tertiary)">
           <label className="flex items-center gap-2 text-[0.7rem] text-(--ui-text-secondary)">
             Active
-            <Switch aria-label="Active" checked={enabled} onCheckedChange={next => void toggleEnabled(next)} size="xs" />
+            <Switch
+              aria-label="Active"
+              checked={enabled}
+              onCheckedChange={next => void toggleEnabled(next)}
+              size="xs"
+            />
           </label>
           {job ? (
             <div className="flex items-center gap-0.5">
-              <Button
-                aria-label="Delete routine"
-                onClick={() => setDeleteOpen(true)}
-                size="icon-xs"
-                variant="ghost"
-              >
+              <Button aria-label="Delete routine" onClick={() => setDeleteOpen(true)} size="icon-xs" variant="ghost">
                 <Trash2 />
               </Button>
               <Button aria-label="Test run" disabled={running} onClick={() => void runNow()} size="xs" variant="ghost">
@@ -303,7 +303,12 @@ export function RoutineEditor({ job, onClose }: RoutineEditorProps) {
         >
           <label className="grid gap-1.5 text-[0.68rem] text-(--ui-text-secondary)">
             Name
-            <Input autoFocus onChange={event => setName(event.target.value)} placeholder="Morning briefing" value={name} />
+            <Input
+              autoFocus
+              onChange={event => setName(event.target.value)}
+              placeholder="Morning briefing"
+              value={name}
+            />
           </label>
           <label className="grid gap-1.5 text-[0.68rem] text-(--ui-text-secondary)">
             Instruction
@@ -342,7 +347,7 @@ export function RoutineEditor({ job, onClose }: RoutineEditorProps) {
             </label>
           ) : null}
 
-          <Button disabled={saving || !prompt.trim() || !schedule} size="sm" type="submit">
+          <Button disabled={saving || !name.trim() || !prompt.trim() || !schedule} size="sm" type="submit">
             {saving ? 'Saving…' : job ? 'Save changes' : 'Create Routine'}
           </Button>
         </form>

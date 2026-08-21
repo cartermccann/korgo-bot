@@ -6,6 +6,7 @@ export type DesktopConnectionMode = (typeof DESKTOP_CONNECTION_MODES)[number]
 export const DESKTOP_CAPABILITY_NAMES = [
   'allowLocalRuntime',
   'allowBootstrap',
+  'allowComputerSurface',
   'allowOrgo',
   'allowComposio',
   'allowLocalCredentialEntry',
@@ -22,6 +23,7 @@ export type DesktopProductPolicy = Readonly<Record<DesktopCapabilityName, boolea
 export const SSH_ONLY_POLICY: DesktopProductPolicy = Object.freeze({
   allowLocalRuntime: false,
   allowBootstrap: false,
+  allowComputerSurface: false,
   allowOrgo: false,
   allowComposio: false,
   allowLocalCredentialEntry: false,
@@ -34,6 +36,7 @@ export const SSH_ONLY_POLICY: DesktopProductPolicy = Object.freeze({
 export const FULL_DESKTOP_POLICY: DesktopProductPolicy = Object.freeze({
   allowLocalRuntime: true,
   allowBootstrap: true,
+  allowComputerSurface: true,
   allowOrgo: true,
   allowComposio: true,
   allowLocalCredentialEntry: true,
@@ -43,7 +46,16 @@ export const FULL_DESKTOP_POLICY: DesktopProductPolicy = Object.freeze({
   allowedConnectionModes: Object.freeze([...DESKTOP_CONNECTION_MODES])
 })
 
+export const LINUX_MINI_POLICY: DesktopProductPolicy = Object.freeze({
+  ...SSH_ONLY_POLICY,
+  allowComputerSurface: true
+})
+
 export function desktopCapabilitiesForSku(sku: DesktopSku): DesktopProductPolicy {
+  if (sku === 'bot-linux-mini') {
+    return LINUX_MINI_POLICY
+  }
+
   return sku === 'bot-ssh-only' ? SSH_ONLY_POLICY : FULL_DESKTOP_POLICY
 }
 

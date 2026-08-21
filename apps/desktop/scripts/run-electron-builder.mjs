@@ -10,9 +10,11 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 
+import { validateDesktopBuildEnvironment } from './desktop-sku.mjs'
+
 const require = createRequire(import.meta.url)
 const DESKTOP_ROOT = path.resolve(import.meta.dirname, '..')
-const SSH_ONLY_SKU = 'bot-ssh-only'
+const STRICT_SSH_SKUS = new Set(['bot-linux-mini', 'bot-ssh-only'])
 const LOCKED_ELECTRON_VERSION = '43.4.1'
 
 function electronDistDir() {
@@ -42,7 +44,8 @@ function electronBuilderCli() {
 
 const dist = electronDistDir()
 const args = []
-const isSshOnlyBuild = process.env.HERMES_DESKTOP_SKU === SSH_ONLY_SKU
+const selectedSku = validateDesktopBuildEnvironment()
+const isSshOnlyBuild = STRICT_SSH_SKUS.has(selectedSku)
 const fixedElectronDist = process.env.HERMES_DESKTOP_ELECTRON_DIST
   ? path.resolve(process.env.HERMES_DESKTOP_ELECTRON_DIST)
   : null
@@ -81,7 +84,7 @@ if (isSshOnlyBuild) {
 
   if (!selectedDist || (!hasReviewedFixedDist && !hasInstalledLockedDist)) {
     console.error(
-      `[run-electron-builder] ${SSH_ONLY_SKU} requires an exact Electron ` +
+      `[run-electron-builder] ${selectedSku} requires an exact Electron ` +
         `${LOCKED_ELECTRON_VERSION} distribution; refusing electron-builder download fallback. ` +
         `HERMES_DESKTOP_ELECTRON_DIST may point only to a preverified fixed-output distribution.`
     )
@@ -102,7 +105,7 @@ if (isSshOnlyBuild) {
     extraMetadata: {
       ...(baseConfig.extraMetadata || {}),
       productName: 'Korgo Bot',
-      hermesDesktopSku: SSH_ONLY_SKU,
+      hermesDesktopSku: selectedSku,
       // Renderer/main code is bundled and the two native dependencies are
       // explicitly staged under dist/node_modules. Retaining the full source
       // dependency map here leaks forbidden integration package names into the

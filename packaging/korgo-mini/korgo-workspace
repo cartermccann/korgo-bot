@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Sandboxed TigerVNC/Openbox workspace and runit control surface.
+
+set -euo pipefail
+
+COMMON="${KORGO_MINI_COMMON:-/usr/local/libexec/korgo-mini/korgo-mini-common}"
+SESSION="${KORGO_MINI_WORKSPACE_SESSION:-/usr/local/libexec/korgo-mini/korgo-workspace-session}"
+[[ -r "$COMMON" ]] || { printf 'korgo-workspace: missing runtime library: %s\n' "$COMMON" >&2; exit 1; }
+# shellcheck disable=SC1090
+source "$COMMON"
+
+print_help() {
+  cat <<'EOF'
+Usage: korgo-workspace start|status|stop|ensure|wrapper-help
+
+The service provides raw RFB only on Mini loopback port 5901. Korgo reaches it
+through the existing strict SSH ControlMaster. No VNC password, public listener,
+host home, Docker socket, system D-Bus, or host runtime tree enters the sandbox.
+EOF
+}
+
+case "${1:-}" in
+  ''|wrapper-help)
+    print_help
+    exit 0
+    ;;
+esac
+
+korgo_load_config
+
+case "$1" in
+  start|ensure)
+    korgo_assert_stage_layout
+    korgo_assert_no_direct_stage_conflict
+    korgo_control_service korgo-workspace "$1"
+    ;;
+  status)
+    conflicts="$(korgo_direct_stage_conflicts)"
+    if [[ -n "$conflicts" ]]; then
+      printf 'conflict: unsandboxed staged Hermes pid(s): %s\n' "${conflicts//$'\n'/,}"
+      exit 2
+    fi
+    korgo_control_service korgo-workspace status
+    ;;
+  stop)
+    korgo_control_service korgo-workspace stop
+    ;;
+  workspace-foreground)
+    korgo_require_runtime_user
+    korgo_assert_stage_layout
+    korgo_assert_no_direct_stage_conflict
+    [[ -x "$SESSION" ]] || korgo_die "workspace session helper is missing"
+    if ss -H -ltn "sport = :$KORGO_VNC_PORT" | grep -q .; then
+      korgo_die "port $KORGO_VNC_PORT is already listening"
+    fi
+    korgo_build_base_bwrap yes
+    KORGO_BWRAP_ARGS+=(
+      --setenv KORGO_VNC_PORT "$KORGO_VNC_PORT"
+      --setenv KORGO_VNC_DISPLAY :1
+      --setenv KORGO_VNC_GEOMETRY 1440x900
+    )
+    exec -a "$0" bwrap "${KORGO_BWRAP_ARGS[@]}" -- \
+      /usr/local/libexec/korgo-mini/korgo-workspace-session
+    ;;
+  *)
+    print_help >&2
+    exit 2
+    ;;
+esac
