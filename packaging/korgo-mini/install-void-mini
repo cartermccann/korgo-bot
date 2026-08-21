@@ -222,7 +222,9 @@ install_tenant_layout() {
   install -d -o "$uid" -g "$gid" -m 0700 \
     "$tenant" "$tenant/home" "$tenant/hermes" "$tenant/workspace" \
     "$tenant/runtime" "$tenant/logs"
-  install -d -o "$uid" -g "$gid" -m 0700 "$tenant/home/.hermes"
+  install -d -o "$uid" -g "$gid" -m 0700 \
+    "$tenant/home/.hermes" \
+    "$tenant/home/.hermes/desktop-ssh"
   install -d -o "$uid" -g "$gid" -m 1777 "$tenant/runtime/X11-unix"
   install -o root -g root -m 0444 /dev/null "$tenant/.korgo-mini-tenant-v1"
 }
