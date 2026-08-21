@@ -26,6 +26,11 @@ are not mounted. Desktop ownership locks, logs, and token files live under the
 staged tenant home, not regular `~/.hermes`; the root-owned wrapper reports that
 host path through `desktop-contract`.
 
+The uv virtualenv's absolute Python symlink is backed by one validated,
+runtime-owned CPython directory below `~/.local/share/uv/python`. That resolved
+directory is mounted read-only at the symlink's exact target. The parent
+`.local`, uv data, and all other host-home content remain absent.
+
 Inside either sandbox, `/home/korgo/.hermes` is a private tmpfs layered after the
 tenant HOME bind, so the host ownership tree and all sibling locks, logs, and
 tokens cannot be enumerated. A `serve` launch validates and opens exactly its
@@ -70,14 +75,14 @@ testing this repository:
 ./packaging/korgo-mini/install-void-mini install --install-packages
 
 # Link the services into runit, still held down.
-/usr/local/sbin/install-korgo-mini enable
+sudo /usr/local/sbin/install-korgo-mini enable
 
 # Start or idempotently ensure both services after reviewing preflight output.
-/usr/local/sbin/install-korgo-mini ensure
+sudo /usr/local/sbin/install-korgo-mini ensure
 
 # Exact individual controls.
-/usr/local/bin/hermes-korgo start|status|stop|ensure
-/usr/local/bin/korgo-workspace start|status|stop|ensure
+sudo /usr/local/bin/hermes-korgo start|status|stop|ensure
+sudo /usr/local/bin/korgo-workspace start|status|stop|ensure
 ```
 
 Set Korgo's remote Hermes path to `/usr/local/bin/hermes-korgo`. The workspace
@@ -101,7 +106,7 @@ bash packaging/korgo-mini/tests/test-static.sh
 Future Mini verification after explicit authorization:
 
 ```bash
-/usr/local/sbin/install-korgo-mini status
+sudo /usr/local/sbin/install-korgo-mini status
 ss -lntp 'sport = :5901'
 ```
 

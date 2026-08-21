@@ -28,9 +28,17 @@ grep -q -- '--chmod 0700 /home/korgo/.hermes' "$ROOT/korgo-mini-common"
 grep -q -- 'korgo_assert_secure_directory "$KORGO_TENANT_HOME/.hermes" 700' "$ROOT/korgo-mini-common"
 grep -q -- '--ro-bind-data "$KORGO_TOKEN_FD"' "$ROOT/korgo-mini-common"
 grep -q -- 'KORGO_HERMES_ARGS\[token_arg_index\]="$sandbox_token_path"' "$ROOT/korgo-mini-common"
+grep -qF -- 'korgo_add_venv_python_runtime_mount' "$ROOT/korgo-mini-common"
+grep -qF -- 'KORGO_BWRAP_ARGS+=(--ro-bind "$python_runtime_root" "$python_link_root")' "$ROOT/korgo-mini-common"
+grep -qF -- '"$runtime_home"/.local/share/uv/python/cpython-*/bin/python*' "$ROOT/korgo-mini-common"
 grep -q -- 'korgo_assert_no_direct_stage_conflict' "$ROOT/hermes-korgo"
 grep -q -- 'exec -a "$0" bwrap' "$ROOT/korgo-mini-common"
 grep -q -- 'cmdline_is_direct_stage_conflict' "$ROOT/korgo-mini-common"
+grep -qF -- 'sv status "$service_link" 2>/dev/null | grep -q '\''^run:'\''' "$ROOT/korgo-mini-common"
+if grep -qF -- 'if sv check "$service_link" >/dev/null 2>&1; then' "$ROOT/korgo-mini-common"; then
+  echo 'ensure treats a healthy held-down runit service as running' >&2
+  exit 1
+fi
 grep -qF -- 'local dir="$RUNIT_ROOT/$name"' "$ROOT/install-void-mini"
 if grep -qF -- 'local name="$1" foreground="$2" dir="$RUNIT_ROOT/$name"' "$ROOT/install-void-mini"; then
   echo 'write_service expands name before it is initialized under set -u' >&2

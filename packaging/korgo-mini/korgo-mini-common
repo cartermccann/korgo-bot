@@ -217,7 +217,8 @@ korgo_control_service() {
     ensure)
       korgo_require_root
       [[ -L "$service_link" ]] || korgo_die "service is not enabled: $service"
-      if sv check "$service_link" >/dev/null 2>&1; then
+      if [[ ! -e "$service_dir/down" ]] &&
+        sv status "$service_link" 2>/dev/null | grep -q '^run:'; then
         korgo_note "$service is already running"
       else
         rm -f -- "$service_dir/down"
@@ -283,6 +284,38 @@ korgo_bwrap_bind_if_present() {
   else
     KORGO_BWRAP_ARGS+=(--ro-bind "$source" "$target")
   fi
+}
+
+korgo_add_venv_python_runtime_mount() {
+  local runtime_home python_link_target python_link_root
+  local python_executable python_runtime_root runtime_mode
+
+  runtime_home="$(getent passwd "$KORGO_RUNTIME_USER" | cut -d: -f6)"
+  korgo_require_safe_absolute_path runtime_home "$runtime_home"
+  python_link_target="$(readlink -- "$KORGO_VENV_ROOT/bin/python")" ||
+    korgo_die "the pinned virtualenv Python must be a reviewed absolute symlink"
+  case "$python_link_target" in
+    "$runtime_home"/.local/share/uv/python/cpython-*/bin/python*) ;;
+    *) korgo_die "the pinned virtualenv Python points outside the reviewed uv runtime root" ;;
+  esac
+
+  python_link_root="${python_link_target%/bin/*}"
+  python_executable="$(readlink -f -- "$KORGO_VENV_ROOT/bin/python")" ||
+    korgo_die "cannot resolve the pinned virtualenv Python"
+  python_runtime_root="${python_executable%/bin/*}"
+  [[ -d "$python_runtime_root" && ! -L "$python_runtime_root" ]] ||
+    korgo_die "resolved uv Python runtime is missing or unsafe"
+  [[ "$(stat -c %u -- "$python_runtime_root")" == "$KORGO_RUNTIME_UID" &&
+    "$(stat -c %g -- "$python_runtime_root")" == "$KORGO_RUNTIME_GID" ]] ||
+    korgo_die "resolved uv Python runtime owner mismatch"
+  runtime_mode="$(stat -c %a -- "$python_runtime_root")"
+  (( (8#$runtime_mode & 8#002) == 0 )) ||
+    korgo_die "resolved uv Python runtime must not be world writable"
+
+  # Preserve the absolute interpreter target expected by the uv virtualenv,
+  # but expose only its resolved CPython runtime—not .local or the host home.
+  korgo_bwrap_parent_chain "$python_link_root"
+  KORGO_BWRAP_ARGS+=(--ro-bind "$python_runtime_root" "$python_link_root")
 }
 
 korgo_build_base_bwrap() {
@@ -475,6 +508,7 @@ korgo_exec_hermes_sandbox() {
   shift
 
   korgo_build_base_bwrap "$die_with_parent"
+  korgo_add_venv_python_runtime_mount
   korgo_prepare_session_token_mount "$@"
   if [[ "$desktop_mode" == 1 ]]; then
     KORGO_BWRAP_ARGS+=(--setenv HERMES_DESKTOP 1)

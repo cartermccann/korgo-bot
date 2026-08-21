@@ -35,6 +35,7 @@ case "$1" in
     korgo_control_service korgo-workspace "$1"
     ;;
   status)
+    korgo_require_root
     conflicts="$(korgo_direct_stage_conflicts)"
     if [[ -n "$conflicts" ]]; then
       printf 'conflict: unsandboxed staged Hermes pid(s): %s\n' "${conflicts//$'\n'/,}"

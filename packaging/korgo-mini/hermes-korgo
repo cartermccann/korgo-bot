@@ -19,7 +19,8 @@ Usage:
 Normal Hermes arguments are passed through a fail-closed bubblewrap boundary.
 Set this executable as Korgo's remote Hermes path. Service-control commands
 manage the persistent `hermes gateway run` runit service and require root except
-for status. The Desktop-owned `serve --isolated` process remains client-owned.
+for non-control Hermes passthrough. The Desktop-owned `serve --isolated`
+process remains client-owned.
 EOF
 }
 
@@ -43,6 +44,7 @@ case "$1" in
     korgo_control_service hermes-korgo "$1"
     ;;
   status)
+    korgo_require_root
     conflicts="$(korgo_direct_stage_conflicts)"
     if [[ -n "$conflicts" ]]; then
       printf 'conflict: unsandboxed staged Hermes pid(s): %s\n' "${conflicts//$'\n'/,}"
