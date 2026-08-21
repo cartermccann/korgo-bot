@@ -231,6 +231,7 @@ json.dump(sorted(leaf_paths(DEFAULT_CONFIG)), sys.stdout, indent=2)
           grep -F '    ''${preflight}' "$module_nix"
           grep -F '    exec ''${execStart}' "$module_nix"
           grep -F 'ExecStart = serviceEntry;' "$module_nix"
+          grep -F '"''${waylandSocket}:''${waylandSocket}"' "$module_nix"
           ! grep -F 'preStart =' "$module_nix"
           grep -F 'IPAddressDeny=any' "$unit"
           grep -F 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6' "$unit"

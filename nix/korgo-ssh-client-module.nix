@@ -254,6 +254,9 @@ in
         BindReadOnlyPaths = [
           "${cfg.identityFile}:/run/korgo-ssh/identity"
           "${cfg.knownHostsFile}:/run/korgo-ssh/known_hosts"
+          # ProtectHome=tmpfs hides /run/user. Re-expose only the reviewed
+          # Wayland socket needed by preflight and the nested bwrap launcher.
+          "${waylandSocket}:${waylandSocket}"
         ];
 
         NoNewPrivileges = true;
