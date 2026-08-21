@@ -29,6 +29,11 @@ less-trusted plugins/content, or a generic remote-desktop SKU.
 - Neither the session nor system D-Bus socket is mounted, and
   `DBUS_SESSION_BUS_ADDRESS` is absent. Same-user Secret Service, portals, and
   the user systemd manager are outside the client boundary.
+- The outer systemd unit deliberately leaves `ProtectKernelTunables` disabled:
+  enabling it makes bubblewrap's nested synthetic procfs mount fail with
+  `EPERM`. Bubblewrap mounts a fresh `/proc` only after unsharing its user/PID
+  namespaces, mounts no host `/sys`, and drops all capabilities before
+  starting Electron; every other systemd hardening control remains enabled.
 - The packaged renderer loads from the secure `korgo-app://bundle` origin, whose
   protocol handler serves only real files below the immutable renderer bundle.
   Its CSP has no loopback connection source, and the SSH SKU contains no

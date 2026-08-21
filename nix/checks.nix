@@ -163,6 +163,8 @@ json.dump(sorted(leaf_paths(DEFAULT_CONFIG)), sys.stdout, indent=2)
           grep -F -- '--unsetenv SSH_AUTH_SOCK' "$launcher"
           grep -F -- '--unsetenv DBUS_SESSION_BUS_ADDRESS' "$launcher"
           grep -F -- '--ro-bind /nix/store /nix/store' "$launcher"
+          grep -F -- '--proc /proc' "$launcher"
+          grep -F -- '--cap-drop ALL' "$launcher"
           grep -F -- '--ro-bind "$identity" "$identity"' "$launcher"
           grep -F -- '--ro-bind "$known_hosts" "$known_hosts"' "$launcher"
           grep -F -- '--bind "$wayland_socket" "$wayland_socket"' "$launcher"
@@ -172,6 +174,14 @@ json.dump(sorted(leaf_paths(DEFAULT_CONFIG)), sys.stdout, indent=2)
           ! grep -F -- '--setenv DBUS_SESSION_BUS_ADDRESS "unix:path=' "$launcher"
           ! grep -F -- 'remote-debugging' "$launcher"
           ! grep -E -- '--(ro-)?bind[^#]*(\$HOME|"\$runtime_dir"[[:space:]]+"\$runtime_dir")' "$launcher"
+
+          # bwrap must create its synthetic procfs after unsharing the PID and
+          # user namespaces. systemd's ProtectKernelTunables mount topology
+          # makes that nested proc mount fail with EPERM, so the outer unit
+          # must leave it disabled while the capability-dropped inner sandbox
+          # remains responsible for procfs isolation.
+          grep -F -- 'ProtectKernelTunables = false;' "$module_nix"
+          grep -Fx -- 'ProtectKernelTunables=no' "$unit"
 
           grep -F -- 'SSH_AUTH_SOCK is present' "$probe"
           grep -F -- 'cannot stat forbidden dummy marker' "$probe"

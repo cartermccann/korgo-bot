@@ -23,6 +23,12 @@ broad egress, AppImage/FUSE fallback, an unlocked download, or a packaged file
 copied from gitignored `apps/desktop/release/`. A failed control blocks the
 gate; it is not permission to widen the boundary.
 
+The generated service intentionally sets `ProtectKernelTunables=false` because
+that outer systemd mount transformation prevents bubblewrap from creating its
+synthetic `/proc`. Do not "fix" this by removing bubblewrap's `--proc /proc` or
+`--cap-drop ALL`; the nested namespace and capability drop are the compatible
+procfs boundary, while the remaining systemd controls stay enabled.
+
 ## Inputs
 
 Record these non-secret inputs before building:
@@ -154,8 +160,10 @@ at login is a new activation event. The generated `ExecStart` wrapper validates
 the bound SSH inputs and immediately `exec`s the launcher in the same mount
 namespace; do not split that validation into `ExecStartPre`. Confirm
 `systemctl show korgo-ssh-client` reports `IPAddressDeny=any`, loopback plus only
-the staged Mini `/32` or `/128`, and the expected hardening. Run the fixed probe by setting
-`containmentProbeArguments` in the dummy module config:
+the staged Mini `/32` or `/128`, and `ProtectKernelTunables=no`. A host-side
+override back to `yes` blocks launch because it prevents bubblewrap's synthetic
+procfs mount. Run the fixed probe by setting `containmentProbeArguments` in the
+dummy module config:
 
 ```text
 --forbid /path/to/dummy-home-marker \

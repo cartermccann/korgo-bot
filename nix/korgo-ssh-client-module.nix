@@ -265,7 +265,11 @@ in
         DevicePolicy = "closed";
         ProtectSystem = "strict";
         ProtectHome = "tmpfs";
-        ProtectKernelTunables = true;
+        # ProtectKernelTunables rewrites the inherited procfs mount topology
+        # and makes bwrap's nested `--proc /proc` fail with EPERM. Keep this
+        # outer control disabled: bwrap supplies a synthetic procfs after
+        # unsharing and drops every capability before starting Electron.
+        ProtectKernelTunables = false;
         ProtectKernelModules = true;
         ProtectKernelLogs = true;
         ProtectControlGroups = true;

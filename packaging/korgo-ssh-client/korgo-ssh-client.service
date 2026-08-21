@@ -23,7 +23,10 @@ PrivateDevices=yes
 DevicePolicy=closed
 ProtectSystem=strict
 ProtectHome=tmpfs
-ProtectKernelTunables=yes
+# bwrap must mount a synthetic procfs in its nested user/PID namespace.
+# Enabling this outer systemd control makes that mount fail with EPERM; the
+# capability-dropped inner sandbox remains responsible for procfs isolation.
+ProtectKernelTunables=no
 ProtectKernelModules=yes
 ProtectKernelLogs=yes
 ProtectControlGroups=yes
